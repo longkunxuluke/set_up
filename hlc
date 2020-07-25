@@ -1,0 +1,156 @@
+#! /usr/bin/perl 
+
+@symbo=("H" ,                                                                                "He",
+        "Li","Be",                                                   "B", "C", "N", "O", "F","Ne",
+        "Na","Mg",                                                  "Al","Si", "P", "S","Cl","Ar",
+        "K" ,"Ca","Sc","Ti", "V","Cr","Mn","Fe","Co","Ni","Cu","Zn","Ga","Ge","As","Se","Br","Kr",
+        "Rb","Sr", "Y","Zr","Nb","Mo","Tc","Ru","Rh","Pd","Ag","Cd","In","Sn","Sb","Te", "I","Xe",
+        "Cs","Ba",
+        "La","Ce","Pr","Nd","Pm","Sm","Eu","Gd","Tb","Dy","Ho","Er","Tm","Yb","Lu",
+                       "Hf","Ta", "W","Re","Os","Ir","Pt","Au","Hg","Tl","Pb","Bi","Po","At","Rn",
+        "Fr","Ra",
+        "Ac","Th","Pa", "U","Np","Pu","Am","Cm","Bk","Cf","Es","Fm","Md","No","Lr");
+
+@velec= (1,2,1,2,3,4,5,6,7,8,  # Ne
+         1,2,3,4,5,6,7,8,1,2,  # Ca
+         "u","u","u","u","u","u","u","u","u","u", # Zn
+         3,4,5,6,7,8,1,2,"u","u", # Zr
+         "u","u","u","u","u","u","u","u",3,4, # Sn
+         5,6,7,8,1,2,"u","u","u","u", # Nd
+         "u","u","u","u","u","u","u","u","u","u",
+         "u","u","u","u","u","u","u","u","u","u", 
+         3,4,5,6,7,8,1,2,"u","u",
+         "u","u","u","u","u","u","u","u","u","u", 
+         "u","u","u","u","u","u","u","u","u","u",);
+$log = $ARGV[0];    
+$mol = `basename $log .log`;
+chomp($mol);
+`makegeom.exe gin < $mol.log > $mol.gin` ;
+$file = "$mol.gin";
+$totvelec = 0;
+$natom = 0;
+open File, $file or die $!;
+while($XYZ = readline(File)){
+    chomp($XYZ);
+    $XYZ =~ s/^\s+//;   # get rid of front and back spaces
+    $XYZ =~ s/$\s+//;
+    @crap = split(/\s+/,$XYZ);
+    if($crap[0] =~ m/-?\d+/){
+        $charge = $crap[0];
+        $mult = $crap[1];
+    }
+    elsif($crap[0] =~ /\w+/ ){
+        $atom[$natom] = $crap[0];
+        print "$natom $atom[$natom]";
+        $natom++;
+    }
+}
+close File;
+#`rm $mol.gin`;
+print "\n";
+for ($i=0;$i < $natom ; $i++){
+    print "$i $atom[$i]\n";
+    for ($k=0;$k < 100 ; $k++) {
+        if (lc($atom[$i]) eq lc($symbo[$k]) ){
+            #    print "$k+1,$symbo[$k] ,$velec[$k]\n";
+            if ($velec[$k] eq "u"){
+             print "  Atom $atom[$i] has an undefined valence electron\n";
+             $velec[$k] = &promptUser("  Do you want to use 1 or 2? ",1); 
+        }
+            $totvelec += $velec[$k];
+        }
+    }
+}
+
+$totvelec = $totvelec - $charge;
+
+print "multiplicity,$mult\n"; 
+print "charge,$charge\n"; 
+print "totvelec,$totvelec\n";
+print "natom,$natom\n";
+
+if($natom == 1){
+    print "  using G3(MP2)-RAD atomic hlc value\n";
+    $A = 9.438;
+    $B = 1.888;
+}
+else{
+    print "  using G3(MP2)-RAD molecular hlc value\n";
+    $A = 9.413;
+    $B = 3.969;
+}
+if($mult==1 or $mult==2){
+    $nb = int($totvelec/2);
+    $na = $totvelec - $nb ;
+}
+elsif($mult==3 or $mult ==4){
+    $nb = int($totvelec/2) -1;
+    $na = $totvelec - $nb ;
+}
+    $HLC = ( -$A*$nb - $B*($na-$nb) )/ 1000;
+    
+    printf "  HLC = %10.8f Hartree \n\n",$HLC;
+
+#----------------------------(  promptUser  )-----------------------------#
+#                                                                         #
+#  FUNCTION:    promptUser                                                #
+#                                                                         #
+#  PURPOSE: Prompt the user for some type of input, and return the        #
+#       input back to the calling program.                                #
+#                                                                         #
+#  ARGS:    $promptString - what you want to prompt the user with         #
+#       $defaultValue - (optional) a default value for the prompt         #
+#                                                                         #
+#-------------------------------------------------------------------------#
+
+sub promptUser {
+
+    #-------------------------------------------------------------------#
+    #  two possible input arguments - $promptString, and $defaultValue  #
+    #  make the input arguments local variables.                        #
+    #-------------------------------------------------------------------#
+
+    local($promptString,$defaultValue) = @_;
+
+    #-------------------------------------------------------------------#
+    #  if there is a default value, use the first print statement; if   #
+    #  no default is provided, print the second string.                 #
+    #-------------------------------------------------------------------#
+
+    if ($defaultValue) {
+        print $promptString, "[", $defaultValue, "]: ";
+    } else {
+        print $promptString, ": ";
+    }
+
+    $| = 1;               # force a flush after our print
+    $_ = <STDIN>;         # get the input from STDIN (presumably the keyboard)
+
+
+    #------------------------------------------------------------------#
+    # remove the newline character from the end of the input the user  #
+    # gave us.                                                         #
+    #------------------------------------------------------------------#
+
+    chomp;
+
+    #-----------------------------------------------------------------#
+    #  if we had a $default value, and the user gave us input, then   #
+    #  return the input; if we had a default, and they gave us no     #
+    #  no input, return the $defaultValue.                            #
+    #                                                                 # 
+    #  if we did not have a default value, then just return whatever  #
+    #  the user gave us.  if they just hit the <enter> key,           #
+    #  the calling routine will have to deal with that.               #
+    #-----------------------------------------------------------------#
+
+    if ("$defaultValue") {
+        return $_ ? $_ : $defaultValue;    # return $_ if it has a value
+    } else {
+        return $_;
+    }
+}
+
+
+__END__
+

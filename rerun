@@ -1,0 +1,123 @@
+#!/usr/bin/perl
+
+if (@ARGV < 1) { die "Syntax: rerun logfile \"gdsub switches\" [-c] [-last] [-noiop]\n   Any switches for rjsub must be enclosed in a single set of quotes. Eg. rerun a.log \"-e -ver 09d01 -mem 10gb\" \n   Use -last to select the final geometry in the .log file rather than the lowest energy geometry.\n   Use -noiop to suppress insertion of IOP(1/19=11).\n   Note: this overwrites the original comfile. Use -c to create and run a new comfile root-2.com. " }
+
+$file = $ARGV[0];
+$switches = "";
+$copy = "n";
+$last = "n";
+$noiop = "n";
+
+for ($i = 1; $i <= 5; $i++) {
+    if ($ARGV[$i]){
+        if ($ARGV[$i] =~ /^-c/){
+            $copy = "y";
+        }
+        elsif ($ARGV[$i] =~ /^-last/){
+            $last = "y";
+        }
+        elsif ($ARGV[$i] =~ /^-noiop/){
+            $noiop = "y";
+        }
+        else {
+            $switches = $ARGV[$i];
+#           $switches =~ s/\"//g;
+#           print "$switches\n";
+        }
+    }
+}
+
+$read = "n";
+$readgeom = "n";
+$npt = 0;
+$lowest = 0;
+$lowestE = 0;
+
+    @symbo=("H" ,                                                                                "He",
+        "Li","Be",                                                   "B", "C", "N", "O", "F","Ne",
+        "Na","Mg",                                                  "Al","Si", "P", "S","Cl","Ar",
+        "K" ,"Ca","Sc","Ti", "V","Cr","Mn","Fe","Co","Ni","Cu","Zn","Ga","Ge","As","Se","Br","Kr",
+        "Rb","Sr", "Y","Zr","Nb","Mo","Tc","Ru","Rh","Pd","Ag","Cd","In","Sn","Sb","Te", "I","Xe",
+        "Cs","Ba",
+        "La","Ce","Pr","Nd","Pm","Sm","Eu","Gd","Tb","Dy","Ho","Er","Tm","Yb","Lu",
+        "Hf","Ta", "W","Re","Os","Ir","Pt","Au","Hg","Tl","Pb","Bi","Po","At","Rn",
+        "Fr","Ra",
+        "Ac","Th","Pa", "U","Np","Pu","Am","Cm","Bk","Cf","Es","Fm","Md","No","Lr");
+
+$orient = `grep orient $file | head -n 1`;
+open (FILE, "<$file") || die "couldn't open $file for reading\n";
+while ($line = <FILE>) {
+ #   print "$line $read\n";
+     if ($line =~ /SCF Done/)  { 
+         @tmp = split(/\s+/,$line);
+         $E[$npt] = $tmp[5];
+         if ($E[$npt] < $lowestE) {
+             $lowestE = $E[$npt-1];
+             $lowest = $npt-1;
+         }
+     }
+     if ($line =~ $orient)  { 
+         $readgeom = "y";
+         $no = 0;
+     }
+     if ($readgeom =~ /y/) {
+        if ($line =~ /^\s+\d+/) { 
+            $geometry[$npt][$no] = $line;
+#           print "$npt:  $geometry[$npt][$no]\n";
+            $no++;
+            }
+        if (($line =~ /Stoich/) || ($line =~ /Distance/) || ($line =~ /Rotational const/)) { 
+            $readgeom = "n";
+            $npt++;
+            } 
+     }
+}
+close (FILE);
+
+$comfile = $file;
+$comfile =~ s/.log/.com/g;
+$newcomfile = $comfile;
+$newcomfile =~ s/.com/-2.com/g;
+
+open (FILE, "<$comfile") || die "couldn't open $comfile for reading\n";
+open (OUTFILE, ">$newcomfile") || die "couldn't open $newcomfile for writing\n";
+$printgeom = "y";
+
+while ($line = <FILE>) {
+     if ($line =~ /[A-Za-z][a-z]?\s+-?\d+\.\d*\s+-?\d+\.\d*\s+-?\d+\.\d*/) { next }
+     if (($noiop =~ /n/) && ($line =~ /IOP\(2\/17/)) { $line =~ s/2\/17/1\/19=11,2\/17/g }
+     print OUTFILE "$line";
+#    if (($line =~ /\s+?-?\d\s+\d\s+?$/) && ($printgeom =~ /y/))  { 
+     if (($line =~ /-?\d\s+\d/) && ($printgeom =~ /y/))  { 
+         for ($i = 0 ;$i <= $no-1; $i++){
+             if ($last =~ /y/) {
+                 @geom = split(/\s+/,$geometry[$npt-1][$i]);
+             }
+             else {
+                 @geom = split(/\s+/,$geometry[$lowest][$i]);
+             }
+             $atom[$i] = $geom[2];
+             $x[$i] = $geom[4];
+             $y[$i] = $geom[5];
+             $z[$i] = $geom[6];
+             $stripped_geometry[$i] = "$symbo[$atom[$i]-1]\t$x[$i]\t$y[$i]\t$z[$i]";
+         }
+         $stripped_geometry = join("\n",@stripped_geometry);
+         print OUTFILE "$stripped_geometry\n";
+#        print "final=$npt-1:   $stripped_geometry\n";
+         $printgeom = "n";
+     }
+}
+close (FILE);
+close (OUTFILE);
+
+if ($copy =~ /y/) {
+    system("gdsub $newcomfile $switches");
+    }
+else { 
+    `mv -f $newcomfile $comfile`;
+    system("gdsub $comfile $switches");
+    print "gdsub $comfile $switches\n";
+    }
+
+

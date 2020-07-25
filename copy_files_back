@@ -1,0 +1,54 @@
+#! /usr/bin/perl
+# Modified by Naomi Haworth 17/3/2015
+
+$remote_user=$ENV{REMOTE_USER};
+$remote_dir=$ENV{REMOTE_DIR};
+
+#raijin1
+@list=`ssh -l $remote_user raijin1.nci.org.au "ls /home/$remote_dir/$remote_user/JOB/*.batch 2> /dev/null "` ;
+
+foreach $i (@list){
+    chomp($i);
+    $a=`basename $i`;
+    $a =~s/.batch//;
+    chomp($a);
+
+    $scplog=`ssh -l $remote_user raijin1.nci.org.au grep scp JOB/$a.job | grep $a.log`;
+    if ($scplog){
+        @templog = split(/\s+|:/,$scplog);
+        `scp $remote_user\@raijin1.nci.org.au:$templog[2] $templog[4]`;
+        $chk =`tail -25 $templog[4] | grep "Normal term"`;
+        if ($chk =~ "Norm") { $fail = "" } else { $fail = "failed" }
+        $alog = $a.".log";
+        printf "%-60s     %6s\n", $alog, $fail;
+    }
+    $scpout=`ssh -l $remote_user raijin1.nci.org.au grep scp JOB/$a.job | grep $a.out`;
+    if ($scpout){
+        @tempout = split(/\s+|:/,$scpout);
+        `scp $remote_user\@raijin1.nci.org.au:$tempout[2] $tempout[4]`;
+        print "$a.out\n";
+    }
+    $scpt21=`ssh -l $remote_user raijin1.nci.org.au grep scp JOB/$a.job | grep $a.t21`;
+    if ($scpt21){
+        @tempt21 = split(/\s+|:/,$scpt21);
+        `scp $remote_user\@raijin1.nci.org.au:$tempt21[2] $tempt21[4]`;
+        print "$a.t21\n";
+    }
+    $scpchk=`ssh -l $remote_user raijin1.nci.org.au grep scp JOB/$a.job | grep chk`;
+    if ($scpchk){
+        @tempchk = split(/\s+|:/,$scpchk);
+        `scp $remote_user\@raijin1.nci.org.au:$tempchk[2] $tempchk[4]`;
+        print "$a - all chk files\n";
+    }
+    $scpcosmo=`ssh -l $remote_user raijin1.nci.org.au grep scp JOB/$a.job | grep $a.cosmo`;
+    if ($scpcosmo){
+        @tempcosmo = split(/\s+|:/,$scpcosmo);
+        `scp $remote_user\@raijin1.nci.org.au:$tempcosmo[2] $tempcosmo[4]`;
+        print "$a.cosmo\n";
+    }
+
+#    print "$a/n";
+    `ssh -l $remote_user raijin1.nci.org.au mv JOB/$a.batch BATCH/$a.batch`;
+}
+
+

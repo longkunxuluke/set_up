@@ -1,0 +1,6 @@
+#!/bin/bash
+
+ls *$1*log > $1.temp.list;
+
+for i in `cat $1.temp.list`;do scfdGsol $i ; done  | sort -n -r -k 2
+

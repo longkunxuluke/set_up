@@ -1,0 +1,37 @@
+#! /usr/bin/perl
+
+$remote_user=$ENV{REMOTE_USER};
+$remote_dir=$ENV{REMOTE_DIR};
+
+#gadi-login-01
+@list=`ssh -l $remote_user gadi.nci.org.au "ls /home/$remote_dir/$remote_user/JOB/*.batch 2> /dev/null "` ;
+
+foreach $i (@list){
+    chomp($i);
+    $a=`basename $i`;
+    $a =~s/.batch//;
+    chomp($a);
+
+    $scplog=`ssh -l $remote_user gadi.nci.org.au grep scp JOB/$a.job | grep $a.log`;
+    if ($scplog){
+        @templog = split(/\s+|:/,$scplog);
+        `scp $remote_user\@gadi.nci.org.au:$templog[2] $templog[4]`;
+        print "$a.log\n";
+    }
+    $scpout=`ssh -l $remote_user gadi.nci.org.au grep scp JOB/$a.job | grep $a.out`;
+    if ($scpout){
+        @tempout = split(/\s+|:/,$scpout);
+        `scp $remote_user\@gadi.nci.org.au:$tempout[2] $tempout[4]`;
+        print "$a.out\n";
+    }
+    $scpt21=`ssh -l $remote_user gadi.nci.org.au grep scp JOB/$a.job | grep $a.t21`;
+    if ($scpt21){
+        @tempt21 = split(/\s+|:/,$scpt21);
+        `scp $remote_user\@gadi.nci.org.au:$tempt21[2] $tempt21[4]`;
+        print "$a.t21\n";
+    }
+#    print "$a/n";
+    `ssh -l $remote_user gadi.nci.org.au mv JOB/$a.batch BATCH/$a.batch`;
+}
+
+

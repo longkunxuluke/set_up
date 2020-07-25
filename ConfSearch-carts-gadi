@@ -1,0 +1,1674 @@
+#! /usr/bin/perl 
+$|++;
+use Term::ANSIColor;
+############################################################################
+#  ConfSearch                                                              #
+#                                                                          #
+#  This code is for performing a conformer search, implementing the EDTS   # 
+#  method.                                                                 #
+#                                                                          #
+#  To execute the code, first make the script executable by running        #
+#  >> "chmod +x ConfSearch"                                                #
+#  from the containing directory.                                          #
+#                                                                          #
+#  USAGE                                                                   #
+#  -----                                                                   #
+#  ConfSearch $mol [$atom1 $atom2] [$gooddist] --> for transition state    #
+#  optimisation, if r12 is fixed, this can be used to help determine the   #
+#  optimised geometry is valid.                                            #
+#                                                                          #
+#  REQUIRES                                                                #
+#  --------                                                                #
+#          1. Input file format "$mol.$dih.com" -> ensure the use of the   #
+#               period (.) as opposed to underscores (_) or hyphens (-)    #
+#          2. $mol.list in the input directory.                            #
+#          3. ~/bin/crinxyz 
+#                                                                          #
+#  Several default values are listed below                                 #
+#     $window ($EC1 and $EC2)                                              #
+#     $Nmax                                                                #
+#                                                                          #
+#  While optimising Error (Address Error) -> Email to ask continue         #
+#  While Runtime Terminate (killed) -> Email to ask continue               #
+#  Not yet deal with Large system where the round2/3 maybe 1000            #
+#  All the job.list is printout in CF-*                                    #
+#  CF-$mol.round1 (if 2nd lowest < 4kJ) -> CF-$mol.round2 -> CF-$mol.round3-$i.tosub
+#                (if 2nd lowest > 4kJ)                  -> CF-$mol.round3-$i.tosub
+#  A few other useful files:
+#                           1. CF-$mol.round$x.uh/lh (upper/lower half with the energy difference)
+#                           2. CF-$mol.*.window (those energies within 4kJ and the first Nmax with their energy difference)
+#                           3. CF-$mol.done (At every stage, the done file will tell you what has been done)
+#                           4. At the end of the program, you can look into CF-$mol.done.*, which tell you the all Energy difference.
+#  To adjust the sleep time:
+#  Current setting: Check full Queue = every $sleep_queue seconds;
+#                   Check Job finished = every day.
+#                       
+############################################################################    
+
+# Modified by Naomi Haworth 17/3/2015
+
+
+############################################################################
+# These variables are user-dependent. Please change them.
+$ProjectCode[0] = ("$ENV{PROJECT}");                 
+$ProjectCode[1] = ("$ENV{PROJECT2}");                 
+if (!($ENV{PROJ1GRANT})) {
+    die "Please edit your .bashrc to include the following lines and source: \nexport PROJECT=f81\nexport PROJECT2=x69\nexport PROJ1GRANT=750\nexport PROJ2GRANT=1000\n";
+}
+else {
+    $grant{$ProjectCode[0]} = $ENV{PROJ1GRANT};
+    $grant{$ProjectCode[1]} = $ENV{PROJ2GRANT};
+}
+$ruser = $ENV{REMOTE_USER};
+$rdir = $ENV{PROJECT};
+#$rdir = "f81";
+$email = "$ENV{email}";             
+$debug=0;
+$machine="gadi";
+$sub="gdsub";
+############################################################################
+
+$maxQ{x69} = 10000; # Max is 400 but can be slow to update 
+$maxQ{f81} = 10000; # Max is 400 but can be slow to update
+$maxQ{user} = 10000; # Limited to 350 to allow space for other group members
+$maxCPU{x69} = 50000; # Default for vu normal queue
+$maxCPU{f81} = 50000; # Default for vu normal queue
+$maxCPU{user} = 50000; # Default for vu normal queue
+$Nmax = 5;  # Default
+$EC1 = 3;  # Default 3kJ/mol
+$EC2 = 4;  # Default 4kJ/mol
+$sleep_job = 1000;
+$sleep_queue = 1000;
+$ncpus = 8;
+
+$mol=$ARGV[0];  
+$atom1=$ARGV[1];
+$atom2=$ARGV[2];
+system(clear);
+if ($ARGV[1]){
+    if (!$ARGV[3] ){
+        $gooddist=2.5;
+        $toldist=0.1;
+        print "No appropriate bond length specified, $gooddist A will be used.\n";
+        print "No appropriate bond length tolerance specified, $toldist A will be used.\n";
+    }
+    else{
+        $gooddist=$ARGV[3];
+        print "Bond length specified at $gooddist A.\n";
+        if (!$ARGV[4]){
+            print "No appropriate bond length tolerance specified, 0.00 A has been used.\n";
+            $toldist=0.00;
+        }
+        else{
+            $toldist=$ARGV[4];
+            print "Bond length tolerance specified at $toldist A.\n";
+        }
+    }
+}
+chomp($mol);
+
+
+#$time1 = `quotasu -P x69 | grep 'Service Units remaining' |sed 's/.*\\*//' | sed 's/ //g'` ;
+#$time2 = `quotasu -P f81 | grep 'Service Units remaining' |sed 's/.*\\*//' | sed 's/ //g'` ;
+#chomp ($time1);
+#chomp ($time2);
+#$time = $time1 + $time2;
+
+#Print Out Warnings!
+print color 'green';
+print "#########################################################################\n";
+print "#                        Starting ConfSearch...                         #\n";
+print "#     Ensure you don't have a period (.) in the name of the molecule.   #\n";
+print "#########################################################################\n\n";
+print color 'reset';
+$p = $ProjectCode[0];
+@alloctime = split(/\s+/,`ssh $machine -l \$REMOTE_USER nci_account -P $p | grep 'Overall' `);
+if ($alloctime[6]/1000 > $grant{$p}) {
+    print "No SU available on project $p.\n";
+    $p1 = 1;
+}
+else {
+    $freetime = $grant{$p} - $alloctime[6]/1000;
+    printf "%4.0f kSU available on project %3s.\n", $freetime, $p;
+    $p1 = 0;
+}
+
+print "\nConformer search for $mol...\n-------------------------------------------------------------------------\n\n";
+
+
+#print "                          Remaining Project Hours $time hr?\n" ;
+###################################################################################
+
+$InputDir = ".";
+
+###################################################################################
+#                                       Round1                                    #
+###################################################################################
+
+print color 'blue';
+print "#########################################################################\n";
+print "#                         Beginning round 1...                          #\n";
+print "#########################################################################\n\n";
+print color 'reset';
+
+if (!-e "CF-$mol.round1"){
+    #system("rm CF-$mol.round1");
+    open fr,">CF-$mol.round1" or die $!;
+    open comlist, "$mol.list" or die $!;
+    while (<comlist>){
+        #@crap=split(/\./,$_);
+        $dih = $_;
+        if (length($dih) <4 || (length($dih)<6 && $dih=~/a1/) ){
+            print fr "$mol.$dih";
+        }
+    }
+    close comlist;
+    close fr;
+}
+
+open round1, "CF-$mol.round1" or die $!;
+while ($r1 = <round1>){
+    foreach $item ($r1){
+        chomp($item);
+        if (! -e "$item.log" and ! -e "$item.job") {
+            while (!($queue = freeQ())){
+                print color 'red';
+                print "Queue on machine $machine is full.\n\n";
+                print color 'reset';
+                sleep $sleep_queue;
+            }
+			testThenSubmit($queue,$item);	
+       }
+    }
+}
+close round1;
+
+sub testThenSubmit {
+	my ($q,$j) = @_;
+	if (!isBadComFile($j)) {
+        system("echo $sub $j.com -rproj $q -cs");
+        if($debug==0){
+            system("$sub $j.com -rproj $q -cs");
+            system("touch $j.job");
+        }
+    }
+	else {
+        print color 'red';
+		print "$j is too crowded.\n";
+        print color 'reset';
+	}
+}
+
+###################################################################################
+#                                       Round2                                    #
+###################################################################################
+system("cat CF-$mol.round1 | sort | uniq > CF-$mol.done");
+open done, "CF-$mol.done" or die $!;
+while ($done = <done>){
+    chomp($done);
+    foreach $y ($done){
+        $fileexist= 1;
+        while ($fileexist){
+            while (! -e "$y.log" ){
+                $fin = `ssh -l $ruser $machine "if \[ -e JOB/$y.batch \] ;then echo 1 ;fi "`;
+                if ($fin ==1){
+                    @rdir = split(/\s+/, `ssh -l $ruser $machine grep Project JOB/$y.batch`);
+                    `scp $ruser\@$machine:/scratch/$rdir[2]/$ruser/RUN/$y/$y.log .`;
+                    `ssh -l $ruser $machine mv JOB/$y.batch BATCH/$y.batch`;
+                }
+                else{
+                    print color 'yellow';
+                    print "$y.log in round 1 does not exist. Waiting for log file from \n   $machine ...\n\n";
+                    print color 'reset';
+                    sleep $sleep_job;
+                }
+            }
+            $fileexist = TScheck("$y");
+        }
+    }
+}
+close done;
+opteng("CF-$mol.round1",$EC1);
+system("wc CF-$mol.round1.lh > CF-$mol.round1.ll" );
+open alength, "CF-$mol.round1.ll" or die $!;
+while ($asd = readline(alength)){
+    @crapl=split(/\s+/,$asd);
+    $l = $crapl[1];
+} 
+close alength;
+squeeze("CF-$mol.round1.uh");
+if ($l ne "1"){
+    print color 'blue';
+    print "########################################################################\n";
+    print "#                         Beginning round 2...                         #\n";
+    print "########################################################################\n\n";
+    print color 'reset';
+    squeeze("CF-$mol.round1.lh");
+    group("CF-$mol.round1.lh.sq");
+    combine("CF-$mol.round1.lh.sq.gp");
+    system("sort CF-$mol.i | uniq | sed 's/\\.//g' | sed 's/\^/$mol./'> CF-$mol.round1.todo");
+    system("rm CF-$mol.i");
+    recomb("CF-$mol.round1.todo");
+    system("mv CF-$mol.round1.todo.uniq CF-$mol.round2");
+
+
+    open round2, "CF-$mol.round2" or die $!;
+    while ($r2 = <round2>){
+        foreach $j ($r2){
+            chomp($j);
+            if (! -e "$j.log" and ! -e "$j.job") {
+                while (!($queue = freeQ())){
+                    print color 'red';
+                    print "Queue on machine $machine is full.\n\n";
+                    print color 'reset';
+                    sleep $sleep_queue;
+                }
+                testThenSubmit($queue,$j);	
+            }
+        }
+    }
+    close round2;
+    open round2, "CF-$mol.round2" or die $!;
+    while ($round2 = <round2>){
+        chomp($round2);
+        foreach $y ($round2){
+            $fileexist= 1;
+            while ($fileexist){
+                while (! -e "$y.log" ){
+                    $fin = `ssh -l $ruser $machine "if \[ -e JOB/$y.batch \] ;then echo 1 ;fi "`;
+                    if ($fin ==1){
+                        @rdir = split(/\s+/, `ssh -l $ruser $machine grep Project JOB/$y.batch`);
+                        `scp $ruser\@$machine:/scratch/$rdir[2]/$ruser/RUN/$y/$y.log .`;
+                        `ssh -l $ruser $machine mv JOB/$y.batch BATCH/$y.batch`;
+                    }
+                    else{
+                        print color 'yellow';
+                        print "$y.log in round 2 does not exist. Waiting for log file from \n   $machine ...\n\n";
+                        print color 'reset';
+                        sleep $sleep_job;
+                    }
+                }
+                $fileexist = TScheck("$y");
+            }
+        }
+    }
+    close round2;
+}
+else {
+    print color 'blue';
+    print "########################################################################\n";
+    print "#                         Beginning round 3...                         #\n";
+    print "########################################################################\n\n";
+    print color 'reset';
+}
+
+###################################################################################
+#                                       Round3                                    #
+###################################################################################
+
+if (-e "CF-$mol.round3"){
+    system("/bin/rm CF-$mol.round3");
+}
+system("touch CF-$mol.round2 CF-$mol.round3");
+
+
+open r1uh, "CF-$mol.round1.uh.sq" or die $!;
+$uhi = 0;
+while (<r1uh>){
+    foreach $x ($_){
+        open r1uhlist, ">CF-$mol.round1.uh.sq.$uhi" or die $!;    
+        print r1uhlist $x;
+        close r1uhlist;
+    }
+    system("cat CF-$mol.round1 CF-$mol.round2 CF-$mol.round3 | sort | uniq > CF-$mol.done");
+
+    opteng("CF-$mol.done",$EC2);
+    window("CF-$mol.done.window","CF-$mol.round1.uh.sq.$uhi");
+    combine("CF-$mol.window");
+    system("cat CF-$mol.i | sed 's/\^/CF-$mol./' > CF-$mol.needreorder");
+    system("rm CF-$mol.i");
+    reorder("CF-$mol.needreorder");
+    #Before submit round3-1, check if there is anything in DONE!
+    recomb("CF-$mol.order");
+    system("sort CF-$mol.order.uniq | uniq > CF-$mol.round3-$uhi.tosub");
+    system("cat CF-$mol.round3-$uhi.tosub >> CF-$mol.round3");     
+    open R3tosub, "CF-$mol.round3-$uhi.tosub" or die $!;
+    print color 'blue';
+    print "########################################################################\n";
+    print "#                        Beginning round 3-$uhi...                     #\n";
+    print "########################################################################\n\n";
+    print color 'reset';
+
+
+    while ($R3 = <R3tosub>){
+        chomp($R3);
+        foreach $y ($R3){
+            if (! -e "$y.log" and ! -e "$y.job") {
+                while (!($queue = freeQ())){
+                    print color 'red';
+                    print "Queue on machine $machine is full.\n\n";
+                    print color 'reset';
+                    sleep $sleep_queue;
+                }
+                testThenSubmit($queue,$y);
+            }
+        }
+    }
+    close R3tosub;
+
+    $fileexist= 1;
+
+    open R3tosub, "CF-$mol.round3-$uhi.tosub" or die $!;
+    while ($R3tosub = <R3tosub>){
+        chomp($R3tosub);
+        foreach $y ($R3tosub){
+            $fileexist= 1;
+            while ($fileexist){
+                #$fin =0;
+                while (! -e "$y.log" ){
+                    $fin = `ssh -l $ruser $machine "if \[ -e JOB/$y.batch \] ;then echo 1 ;fi "`;
+                    if ($fin ==1){
+                        @rdir = split(/\s+/, `ssh -l $ruser $machine grep Project JOB/$y.batch`);
+                        `scp $ruser\@$machine:/scratch/$rdir[2]/$ruser/RUN/$y/$y.log .`;
+                        `ssh -l $ruser $machine mv JOB/$y.batch BATCH/$y.batch`;
+                    }
+                    else{
+                        print color 'yellow';
+                        print "$y.log in round 3 does not exist. Waiting for log file from \n   $machine ...\n\n";
+                        print color 'reset';
+                        sleep $sleep_job;
+                    }
+                }
+                $fileexist = TScheck("$y");
+            }
+        }
+    }
+    close R3tosub;
+    $uhi++; 
+}
+
+close r1uh; 
+system("cat CF-$mol.round1 CF-$mol.round2 CF-$mol.round3 | sort | uniq > CF-$mol.done");
+opteng("CF-$mol.done",$EC2);
+system("rm CF-$mol.*order* CF-$mol.*sq* CF-$mol.*.ll");
+print color 'green';
+print "########################################################################\n";
+print "#                    Conformer search complete.                        #\n";
+print "########################################################################\n\n";
+print color 'reset';
+system("touch CF-$mol.complete");
+
+############################################################################
+#                                  freeQ                                   #
+############################################################################    
+sub freeQ{
+    for ($i = $p1; $i <= $#ProjectCode; $i++) {    
+        $p = $ProjectCode[$i];
+#       $p = "f81"; 
+        @totalQ = split(/\s+/,`ssh $machine -l \$REMOTE_USER /opt/pbs/default/bin/nqstat -P $p | grep ' $ruser ' | grep ' $p ' | wc `);
+        @Queuejob = `ssh $machine -l \$REMOTE_USER /opt/pbs/default/bin/nqstat -P $p | grep ' $p ' | sed 's/.*MB//' | sed 's/.*GB//'`;
+        print "\n";
+        print "Total queued jobs for project $p is $#Queuejob. ";
+        if($#Queuejob >= $maxQ{$p}){
+            print "This is greater than the limit of $maxQ{$p} per project.\n";
+        }
+        else{
+            print "This is less than the limit of $maxQ{$p} per project.\n";
+            print "Total queued jobs for $ruser on project $p = ", $totalQ[1],". ";
+            if ($totalQ[1] >= $maxQ{user}){
+                print "This is greater than the limit of $maxQ{user} per user.\n";
+            }    
+            else{
+                print "This is less than the limit of $maxQ{user} per user.\n";
+                return $p;
+            }
+        }
+    }
+
+    return 0;
+}
+
+#sub freeQ{
+#   @totalQ = split(/\s+/,`ssh $machine -l \$REMOTE_USER /opt/pbs/default/bin/nqstat -P $rdir | grep ' $ruser ' | grep ' $rdir ' | wc `);
+#   @totalCpus = `ssh $machine -l \$REMOTE_USER /opt/pbs/default/bin/nqstat | grep ' \$REMOTE_USER ' | grep ' $rdir ' | sed 's/.*MB//' | sed 's/.*GB//' `;
+#   $Cpus = add(@totalCpus);
+
+#   print "\n";
+#   if ($totalQ[1] >= $maxQ{user}){
+#       print "Total queued jobs = ", $totalQ[1]," is greater than $maxQ{user} per user.\n";
+#       print "test\n";
+#   }
+#   elsif ($Cpus + $ncpus >= $maxCPU{user}){
+#       $Cpus1 = $Cpus + $ncpus;
+#       print "Total CPUs in use = ", $Cpus1 , " is greater than $maxCPU{user} per user.\n";
+#   }
+#   else{
+#       print "Total CPUSs in use = ", $Cpus , " is less than $maxCPU{user} per user.\n";
+#       print "Total queued jobs = ", $totalQ[1]," is less than $maxQ{user} per user.\n";
+#       foreach $p (@ProjectCode){
+#       for ($i = 0; $i <= 1; $i++) {    
+#           if ($i == 0) {$p = "f81"} else {$p = "x69"}
+#           @Queuejob = `ssh $machine -l \$REMOTE_USER /opt/pbs/default/bin/nqstat -P $p | grep ' $p ' | sed 's/.*MB//' | sed 's/.*GB//'`;
+#           $currentCpus =add(@Queuejob);
+#           print "Total CPUs in use for project $p is $currentCpus.\n";
+#           print "Total queued jobs for project $p is $#Queuejob.\n\n";
+#           if ($currentCpus + $ncpus >= $maxCPU{$p}){  # this is for max 1000 per project.
+#               print "Total queued cpus = ", $currentCpus + $ncpus," is greater than $maxCPU{$p} per project.\n";
+#           }
+#           if($#Queuejob+1 >= $maxQ{$p}){
+#               print "Total queued jobs = ", $#Queuejob+1," is greater than $maxQ{$p} per project.\n";
+#           }
+#           else{
+#               return $p;
+#           }
+#       }
+#   }
+
+#   return 0;
+#}
+
+############################################################################
+#                                  add                                     #
+############################################################################    
+
+sub add{
+    $sum = 0;
+    while (@_) {
+        $Q = shift @_;
+        next unless($Q =~ m/[0-9]/);
+        $sum+=$Q;
+    }
+    return $sum;
+}
+
+
+
+############################################################################
+#       Check Output file is Valid (Good Distance) for TS Optimisation     # 
+############################################################################    
+
+sub TScheck {
+    my $file = shift(@_);
+
+    $jobdone =-2 ;
+
+    open ifh, "$file.log" or die $!;
+    if ($ARGV[1]){ #doing ts
+        system("crinxyz $file.log ");
+        open xyzfile, "$file.xyz" or die $!;
+        readline(xyzfile);
+        readline(xyzfile);
+        $natom=1;
+        while ($atomline = readline(xyzfile)){
+            @atom = split(/\s+/,$atomline);
+            $atomx[$natom]= $atom[1];
+            $atomy[$natom]= $atom[2];
+            $atomz[$natom]= $atom[3];
+            $natom ++;
+        }
+        close xyzfile;
+        if ($atom[1] =~/Xx/){
+            $bondlength =0.0
+        }
+        else{
+            $bondlength = 
+            sqrt(($atomx[$atom1] - $atomx[$atom2])**2 + ($atomy[$atom1] - $atomy[$atom2])**2 + ($atomz[$atom1] - $atomz[$atom2])**2);
+        }
+    }
+    while ($line = readline(ifh)) {
+        if ($line=~ /Normal/){
+            $jobdone=1;
+        }
+        elsif ($line=~ /Address/){
+            $jobdone=-1;
+        }
+        elsif ($line=~ /kill/){
+            $jobdone=-2;
+        }
+    }
+    close ifh;
+
+    if (($jobdone <=-2) ) { 
+        if ($ARGV[1]){
+            if ( $bondlength<= $gooddist+$toldist and $bondlength >= $gooddist-$toldist){
+                printf "%s killed, no resubmit\t %5.2f\t(within %5.2f-%5.2f )\n",$file,$bondlength,$gooddist-$toldist,$gooddist+$toldist;
+                $resub = "N";  # maybe yes
+                system("mailx -s 'Resubmit $file (killed), bond length is $bondlength within $gooddist-$toldist and $gooddist+$toldist' $email < $file.xyz ") ;
+            }
+            else{
+                printf "%s killed, no resubmit\t %5.2f\t(scratcher than %5.2f or longer than %5.2f)\n",$file,$bondlength,$gooddist-$toldist,$gooddist+$toldist;
+                $resub = "N";
+                system("mailx -s 'NO Resubmit $file (killed), bond length is $bondlength scratcher than $gooddist-$toldist or longer than $gooddist+$toldist' $email < $file.xyz ") ;
+            }
+        }
+        else{
+            #printf "%s killed, resubmit the job\n",$file; 
+            #$resub = "Y";
+            printf "%s killed, No resubmit the job\n",$file; 
+            $resub = "N";
+
+        }
+        if ($resub eq "Y"){
+            system("cat $file.log >> $file.log.2; /bin/rm $file.log"); 
+            return 0; 
+        }
+    }
+    elsif (($jobdone ==-1) ) { 
+        if ($ARGV[1]){
+            if ( $bondlength<= $gooddist+$toldist and $bondlength >= $gooddist-$toldist){
+                printf "%s Address Error, resubmit\t %5.2f\t(within %5.2f- %5.2f)\n",$file,$bondlength,$gooddist-$toldist,$gooddist+$toldist;
+                $resub = "N"; # maybe yes
+                system("mailx -s 'Resubmit $file (Address Error), bond length is $bondlength (within $gooddist-$toldist and $gooddist +$toldist), but we adivice you to check what causes this Address Error Termination' $email < $file.xyz ") ;
+            }
+            else{
+                printf "%s Address Error, no resubmit\t %5.2f\t(scratcher than %5.2f or longer than %5.2f)\n",$file,$bondlength,$gooddist-$toldist,$gooddist+$toldist;
+                $resub = "N";
+                system("mailx -s 'NO Resubmit $file (Address Error), bond length is $bondlength (scratcher than $gooddist -$toldist or longer than $gooddist+$toldist), ' $email < $file.xyz ") ;
+            }
+        }
+        else{
+            #printf "%s  Address Error, resubmit the job\n",$file; 
+            #$resub = "Y";
+            printf "%s  Address Error, No resubmit the job\n",$file; 
+            $resub = "N";
+        }
+        if ($resub eq "Y"){
+            system("cat $file.log >> $file.log.2; /bin/rm $file.log"); 
+            return 0; 
+        }
+    }    
+    elsif ($jobdone ==1){
+        if ($ARGV[1]){
+            if ( $bondlength<= $gooddist+$toldist and $bondlength >= $gooddist-$toldist){
+                print color 'green';
+                printf "%s terminated normally\t %5.2f\t(within %5.2f- %5.2f)\n",$file,$bondlength,$gooddist-$toldist,$gooddist+$toldist;
+                print color 'reset';
+            }
+            else{
+                print color 'green';
+                printf "%s terminated normally.\t %5.2f\t(scratcher than %5.2f or longer than %5.2f)\n",$file,$bondlength,$gooddist-$toldist,$gooddist+$toldist;
+                print color 'reset';
+            }
+        }
+        else{
+            print color 'green';
+            printf "%s terminated normally.\n\n",$file;
+            print color 'reset';
+        }
+        return 0;
+    }
+}
+
+
+############################################################################
+#                                  OptEng                                  #
+############################################################################    
+
+sub opteng{
+    $count = 0;
+    my ($roundlist,$window) = @_;
+    open roundlist, $roundlist or die $!;
+    while ($round = <roundlist>) {
+        foreach $i ($round){
+            chomp($i);
+            @roundlist=split(/\./,$i);
+            $dih[$count] = $roundlist[1];
+            @crap = split(/\s+/,`grep Done $i.log | tail -n 1 `);
+            $eng[$count]=$crap[5];
+#            open output, "$i.log" or die $!; # this might be taking too much time, to get energy for each of them. need reoptimize!! Leaf
+#            while (<output>) {
+#                if (/SCF D/) {
+#                    @crap=split(/\s+/,$_);
+#                    $eng[$count]=$crap[5];
+#                }
+#            }
+#            close output;
+            if ($ARGV[1]){
+                system("crinxyz $i.log ");
+                open xyzfile, "$i.xyz" or die $!;
+                readline(xyzfile);
+                readline(xyzfile);
+                $natom=1;
+                while ($atomline = readline(xyzfile)){
+                    @atom = split(/\s+/,$atomline);
+                    $atomx[$natom]= $atom[1];
+                    $atomy[$natom]= $atom[2];
+                    $atomz[$natom]= $atom[3];
+                    $natom ++;
+                }
+                close xyzfile;
+                $bonddist[$count] = 
+                sqrt(($atomx[$atom1] - $atomx[$atom2])**2 + ($atomy[$atom1] - $atomy[$atom2])**2 + ($atomz[$atom1] - $atomz[$atom2])**2);
+
+                if ( $bonddist[$count] >= $gooddist+$toldist or $bonddist[$count] <= $gooddist-$toldist){
+                    $eng[$count] = 0.0;
+                }
+                #print "$dih[$count] , $bonddist[$count]\n";
+            }
+            #print "$dih[$count] , $eng[$count]\n";
+            $count ++;
+        }
+    }
+
+    close roundlist;
+
+    sub numerically { $a <=> $b; }
+    @sorteng = sort numerically @eng;
+
+
+    $sortk=0;
+    while ($sortk <$count){
+        for ($k = 0; $k < $count ; $k++){
+            if ($sorteng[$sortk] == $eng[$k] ){
+                $sortdih[$sortk] = $dih[$k];
+                $sortk++;
+            }
+        }
+    }
+
+
+    open fla, ">$roundlist.all" or die $!;
+    open flh, ">$roundlist.lh" or die $!;
+    open flw, ">$roundlist.window" or die $!;
+    open fuh, ">$roundlist.uh" or die $!;
+
+    $Lowest = ($sorteng[1]-$sorteng[0]) *2625.5;
+    if ($Lowest < $window){
+        for ($sortk = 0; $sortk < $count ; $sortk++){  
+            $Deng[$sortk]= ($sorteng[$sortk]-$sorteng[0]) *2625.5;  
+            if (($Deng[$sortk] < $window && $Deng[$sortk]> -$window)&& $sortk < $Nmax ){
+                printf flw "Less than %.2fkJ/mol= %s \t%f\n", $window, $sortdih[$sortk], $Deng[$sortk];
+            }
+            if ($sortk < $count/2) {
+                printf flh "Lower Half = %s \t%f\n", $sortdih[$sortk], $Deng[$sortk];
+                printf fla "Lower Half = %s \t%f kJ/mol or %f Hartree\n", $sortdih[$sortk], $Deng[$sortk], $sorteng[$sortk];
+            }
+            else{
+                printf fuh "Upper Half = %s \t%f\n", $sortdih[$sortk], $Deng[$sortk];
+                printf fla "Upper Half = %s \t%f kJ/mol or %f Hartree\n", $sortdih[$sortk], $Deng[$sortk], $sorteng[$sortk];
+            } 
+        }
+
+    print "\n-----------------------------------------------------------\n";
+    printf "Lowest energy conformer is %s \t%f Hartree\n", $sortdih[0], $sorteng[0];
+    printf "The next lowest is %s \t+%f kJ/mol\n", $sortdih[1] ,$Lowest ;
+    print "-----------------------------------------------------------\n";
+    }
+    else {
+        print "\n-----------------------------------------------------------\n";
+        printf "Lowest 1 = %s \t%f Hartree\n", $sortdih[0], $sorteng[0];
+        printf "No other conformer has energy less than %.2fkJ/mol\n", $window;
+        print "-----------------------------------------------------------\n";
+        printf flh "Lowest 1 = %s \t%f\n", $sortdih[0], $Deng[0];
+        printf fla "Lowest 1   = %s \t%f kJ/mol or %f Hartree\n", $sortdih[0], $Deng[0], $sorteng[0];
+        printf flw "Less than %.2fkJ/mol= %s \t%f\n", $window, $sortdih[0], $Deng[0];
+        for ($sortk = 1; $sortk < $count ; $sortk++){  
+            $Deng[$sortk]= ($sorteng[$sortk]-$sorteng[0]) *2625.5;
+            printf fuh "Upper Rest = %s \t%f\n", $sortdih[$sortk], $Deng[$sortk];
+            printf fla "Upper Rest = %s \t%f kJ/mol or %f Hartree\n", $sortdih[$sortk], $Deng[$sortk], $sorteng[$sortk];
+        }
+    }
+
+    close fla;
+    close flh;
+    close flw;
+    close fuh;
+}
+
+############################################################################
+#                                  Squeeze                                 #
+############################################################################    
+
+sub squeeze{
+    my $tosq=shift(@_);
+
+    open filesq,">$tosq.sq" or die $!;
+
+    open tosq, $tosq or die $!;
+    $count=0;
+    while ($dihhh= readline(tosq)){
+        @crap=split(/\s/,$dihhh);
+        $dih = $crap[3];
+        if (length($dih) <4 ){
+            print filesq "$dih\n";
+        }
+        else {
+            @IndDih= split(/a1/,$dih);
+            print filesq "$IndDih[1]\n";
+        }
+    }
+    close tosq;
+    close filesq;
+}
+############################################################################
+#                                  Group                                   #
+############################################################################    
+
+sub group{
+    my $togp=shift(@_);
+
+    $count  = 0;
+    $maxk   = 0;
+    @list   = ("a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z");
+
+    open togp, "$togp" or die $!;
+    while ($dih[$count] = readline(togp)){
+        chomp($dih[$count]);
+        @diha = split(/\d+/,$dih[$count]);
+        $aaa[$count] = $diha[0];
+        chomp($aaa[$count]);
+        for ($k=0;$k<=length[$list];$k++){
+            #$group[$k][0]="";
+            if ("$aaa[$count]" eq "$list[$k]"){
+                $group[$k][$gp[$k][$dep]]= $dih[$count] ;
+                $gp[$k][$dep]++;
+                if ($k > $maxk){ $maxk = $k;}
+            }
+        }
+        $count++;
+    }
+    close togp;
+
+
+    open filegp, ">$togp.gp" or die $!;
+
+    for ($i=0;$i<=$maxk; $i++) {
+        if ( length($group[$i]) > 0 ){ 
+            for ($j=0;$j<=$gp[$i][$dep];$j++) {
+                print filegp "$group[$i][$j] " ;
+            }
+            print filegp "\n";
+        }
+    }
+
+    close filegp;
+}
+############################################################################
+#                                  Combine without.                        #
+############################################################################    
+sub combine{
+
+    @data = ();
+    #use Data::Dumper;
+
+    my $tocomb = shift(@_);
+    open tocomb,"$tocomb" or die $!;
+
+
+    while ($nnn=readline(tocomb)){
+        push(@data,[split(/\s+/,$nnn)]);;
+    }
+
+    close tocomb;
+
+    open moli, ">CF-$mol.i" or die $!;
+# start at 1 to skip the empty selection
+    for ($i = 3; $i < 2**@data; $i++) {
+        @bin = dec2bin($i);
+        my @tmp = ();
+        for ($j = 0; $j < @bin ;$j++) {
+            push(@tmp,$data[$j]) if ($bin[$j]);
+        }
+        perm("",@tmp);
+    }
+
+
+    sub dec2bin {
+        my $str = unpack("B32", pack("N", shift));
+        $str =~ s/^0+(?=\d)//;
+        return split(//,reverse($str));
+    }
+
+
+
+    sub perm {
+        my ($s,@a) = @_;
+        my $i; 
+
+        if (@a) {
+            my @b = @{$a[0]};
+            shift (@a);
+            for (@b) {
+                #change this line later
+                perm($s."$_.",@a);
+            }
+        }else {
+            #print length($s),"\n";
+            #print "$s\n";
+            if (length($s)>3){
+                if ($s =~ /a/) {
+                    print moli "$s\n";
+                }
+                else{
+                    print moli "a1.$s\n";
+                }
+            }
+        }
+        return;
+    }
+
+    close moli;
+}
+############################################################################
+#                                  ReCombine                               #
+############################################################################    
+
+sub recomb{
+    my $torc = shift(@_);
+    chomp($torc);
+    open torc, "$torc" or die $!;
+    open moldone,"CF-$mol.done" or die $!;
+    $count1=0;
+    $count2=0;
+    while ($crap1[$count1] = readline(torc)){
+        chomp($crap1[$count1]);
+        @crap2 = split(/\./,$crap1[$count1]);
+        $todo[$count1] = $crap2[1];
+        $count1++;
+    }
+    while ($crap2[$count2] = readline(moldone)){
+        chomp($crap2[$count2]);
+        @crap3 = split(/\./,$crap2[$count2]);
+        $done[$count2] = $crap3[1];
+        $count2++;
+    }
+    open todo, ">$torc.uniq" or die $!; 
+    for ($kk=0;$kk< $count1 ; $kk++){
+        for ($jj=0;$jj<$count2;$jj++){
+            if ("$done[$jj]" eq "$todo[$kk]"){
+                $iii=1;
+            }
+            else{
+                $iii=0;
+            }
+        }
+        if ($iii ==0){
+            print todo "$mol.$todo[$kk]\n";
+        }
+    }
+    close moldone;
+    close todo;
+    close torc;
+}
+
+############################################################################
+#                          Window                                          #
+#     < CF-$mol.done.window CF-$mol.round1.uh.sq.$i > CF-$mol.window                #
+############################################################################    
+
+sub window {
+    my ($donewd,$uhi)=@_;
+
+    open wd,">CF-$mol.window" or die $!;
+
+    open uhi, "$uhi" or die $!;
+    while ($dihh= readline(uhi)){
+        @crap=split(/\s/,$dihh);    
+        $dih = $crap[0];
+        print wd "$dih ";
+    }
+    print wd "\n";
+    close uhi;
+
+    open donewd, $donewd or die $!;
+    $count=0;
+    while ($dihh= readline(donewd)){
+        @crap=split(/\s/,$dihh);
+        $dih = $crap[3];
+        $dih =~ s/(\d)/$1\./g;
+        print wd "$dih ";
+    }
+    close wd;
+    close donewd;
+}
+
+
+############################################################################
+#                          Window                                          #
+#     < CF-$mol.done.window CF-$mol.round1.uh.sq.$i > CF-$mol.window       #
+############################################################################    
+sub reorder{
+    @list   = ("a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y","z");
+
+    my $order = shift(@_);
+    open molorder,">CF-$mol.order" or die $!;
+
+    open order, $order or die $!;
+    while ($dihhh= readline(order)){
+        @crap=split(/\./,$dihhh);
+        print molorder "CF-$mol.";
+        for ($count=@crap; $count >0 ; $count--){
+            $dih[$count] = $crap[$count];
+            @ttt = split(/\d+/,$dih[$count]);
+            $a[$count]= $ttt[0];
+            $n[$count]= $ttt[1];
+            for ($j=0; $j<26; $j++){
+                if ("$a[$count]" eq "$list[$j]") {
+                    $ooo[$j] = $dih[$count]; 
+                }
+            }
+        }
+        for ($j=0; $j<26; $j++){       
+            print molorder "$ooo[$j]";
+        }
+        @ooo = ();
+        print molorder "\n";
+    }
+
+    close order;
+    close molorder;
+}
+
+#----------------------------(  promptUser  )-----------------------------#
+#                                                                         #
+#  FUNCTION:    promptUser                                                #
+#                                                                         #
+#  PURPOSE: Prompt the user for some type of input, and return the        #
+#       input back to the calling program.                                #
+#                                                                         #
+#  ARGS:    $promptString - what you want to prompt the user with         #
+#       $defaultValue - (optional) a default value for the prompt         #
+#                                                                         #
+#-------------------------------------------------------------------------#
+
+sub promptUser {
+
+    #-------------------------------------------------------------------#
+    #  two possible input arguments - $promptString, and $defaultValue  #
+    #  make the input arguments local variables.                        #
+    #-------------------------------------------------------------------#
+
+    local($promptString,$defaultValue) = @_;
+
+    #-------------------------------------------------------------------#
+    #  if there is a default value, use the first print statement; if   #
+    #  no default is provided, print the second string.                 #
+    #-------------------------------------------------------------------#
+
+    if ($defaultValue) {
+        print $promptString, "[", $defaultValue, "]: ";
+    } else {
+        print $promptString, ": ";
+    }
+
+    $| = 1;               # force a flush after our print
+    $_ = <STDIN>;         # get the input from STDIN (presumably the keyboard)
+
+
+    #------------------------------------------------------------------#
+    # remove the newline character from the end of the input the user  #
+    # gave us.                                                         #
+    #------------------------------------------------------------------#
+
+    chomp;
+
+    #-----------------------------------------------------------------#
+    #  if we had a $default value, and the user gave us input, then   #
+    #  return the input; if we had a default, and they gave us no     #
+    #  no input, return the $defaultValue.                            #
+    #                                                                 # 
+    #  if we did not have a default value, then just return whatever  #
+    #  the user gave us.  if they just hit the <enter> key,           #
+    #  the calling routine will have to deal with that.               #
+    #-----------------------------------------------------------------#
+
+    if ("$defaultValue") {
+        return $_ ? $_ : $defaultValue;    # return $_ if it has a value
+    } else {
+        return $_;
+    }
+}
+
+
+#if (isBadComFile($ARGV[0])) {
+#    print "Com file too crowded\n";
+#}
+
+##############################################################
+
+# Usage isBadComFile(nameOfMolecule)
+sub isBadComFile {
+    my $maxBadness = 2;
+    my $tol = 0.3;
+
+    #atomic radii(empirical) (picometres)
+    #http://en.wikipedia.org/wiki/Atomic_radii_of_the_elements_%28data_page%29
+    my @symbol=("H","He",
+               "Li","Be",                                                   "B", "C", "N", "O", "F","Ne",
+               "Na","Mg",                                                  "Al","Si", "P", "S","Cl","Ar",
+               "K","Ca","Sc","Ti", "V","Cr","Mn","Fe","Co","Ni","Cu","Zn","Ga","Ge","As","Se","Br","Kr",
+               "Rb","Sr", "Y","Zr","Nb","Mo","Tc","Ru","Rh","Pd","Ag","Cd","In","Sn","Sb","Te", "I","Xe",
+               "Cs","Ba",
+               "La","Ce","Pr","Nd","Pm","Sm","Eu","Gd","Tb","Dy","Ho","Er","Tm","Yb","Lu",
+               "Hf","Ta", "W","Re","Os","Ir","Pt","Au","Hg","Tl","Pb","Bi","Po","At","Rn",
+               "Fr","Ra",
+               "Ac","Th","Pa", "U","Np","Pu","Am","Cm","Bk","Cf","Es","Fm","Md","No","Lr");
+
+    my @radii= ( 25,  0,145,105, 85, 70, 65, 60, 50,  0,
+                180,150,125,110,100,100,100, 71,220,180,
+                160,140,135,140,140,140,135,135,135,135,
+                130,125,115,115,115,  0,235,200,180,155,
+                145,145,135,130,135,140,160,155,155,145,
+                145,140,140,  0,260,215,195,185,185,185,
+                185,185,185,180,175,175,175,175,175,175,
+                175,155,145,135,135,130,135,135,135,150,
+                190,180,160,190,  0,  0,  0,215,195,180,
+                180,175,175,175,175,  0,  0,  0,  0,  0,
+                0,  0,  0); 
+
+    my @coord= (1,  1,  1,  2,  3,  4,  3,  2,  1,  1,
+                1,  2,  3,  4,  5,  6,  1,  1,  1,  2,
+                8,  8,  8,  8,  8,  8,  8,  8,  8,  8,
+                8,  8,  8,  8,  8,  8,  8,  8,  8,  8,
+                8,  8,  8,  8,  8,  8,  8,  8,  8,  8,
+                8,  8,  8,  8,  8,  8,  8,  8,  8,  8,
+                8,  8,  8,  8,  8,  8,  8,  8,  8,  8,
+                8,  8,  8,  8,  8,  8,  8,  8,  8,  8,
+                8,  8,  8,  8,  8,  8,  8,  8,  8,  8,
+                8,  8,  8,  8,  8,  8,  8,  8,  8,  8,
+                8,  8,  8,  8,  8,  8,  8,  8,  8,  8,
+                8,  8,  8,  8,  8,  8,  8,  8,  8,  8,
+                8,  8,  8,  8,  8,  8,  8,  8,  8,  8,
+                8,  8,  8); 
+
+    my $molecule = shift;
+
+    my @atom;
+    my @X, @Y, @Z;
+
+    my $badnessCount = 0;
+    
+    #zmtCom2xyz($molecule, \@atom, \@X, \@Y, \@Z);
+
+    $cominput=file2string("$molecule.com");
+    stripcom($cominput);
+
+    if ($iszmat){
+        zmtCom2xyz($molecule, \@atom, \@X, \@Y, \@Z);
+    }
+    else{
+        #print $cominput;
+        @lines= split(/\n/,$cominput);
+        for ($i =0 ; $i <= $#cominput ; $i++){
+            ($Z[$i],$Y[$i],$X[$i],$atom[$i]) = reverse(split(/\s+/,$lines[$i]));
+        }
+    }
+
+
+    for ($i=0;$i <= $#atom; $i++){
+        for ($j=0;$j < $i; $j++){
+            $bonding[$i]=0;
+            $bonding[$j]=0;
+        }
+    }
+
+    for ($i=0;$i <= $#atom; $i++){
+        for ($k=0; $k <= $#symbol; $k++){
+            if (lc($atom[$i]) eq lc($symbol[$k])){
+                $allow[$i] = $radii[$k]*0.01;
+                $coordN[$i] = $coord[$k];
+            }
+        }
+        for ($j=0;$j < $i; $j++){
+            $dist[$i][$j] = sqrt(($X[$i] - $X[$j])**2 + ($Y[$i] - $Y[$j])**2 +($Z[$i] - $Z[$j])**2) ;
+            $sbond[$i][$j] = $allow[$i] + $allow[$j] -$tol;
+            $lbond[$i][$j] = $allow[$i] + $allow[$j] +$tol;
+
+
+
+            # test if one atom is too close to another
+            if ($sbond[$i][$j] > $dist[$i][$j]){
+                print color 'red';
+                printf "Atoms %s and %s have a bond length of %f, which is less than\n", $i+1, $j+1, $dist[$i][$j];
+                printf "the allowed value %f.\n\n", $sbond[$i][$j] ;
+                print color 'reset';
+                $badnessCount++;
+            }
+
+            # test if an atom has too many neighbours
+            if ($lbond[$i][$j] > $dist[$i][$j]){
+                $bonding[$i]++;      
+                $bonding[$j]++;      
+                #            printf "bonding site: %s, %s\n",$i+1,$j+1;
+            }
+        }
+    }
+    for ($i=0;$i <= $#atom; $i++){
+        #print "$i+1, $bonding[$i]\n";
+        if ($bonding[$i] > $coordN[$i])
+        {
+            print color 'red';
+            printf "Atom %s has %s bonds, greater than the allowed number, %s.\n",$i+1,$bonding[$i], $coordN[$i];
+            print color 'reset';
+            $badnessCount++;
+        }
+    }
+
+    print color 'blue';
+    print "$molecule.com file badness rating = $badnessCount\n";
+    print color 'reset';
+
+    if ($badnessCount > $maxBadness) {
+        fakeGaussian($molecule);
+        return 1;
+    }
+    return 0;
+}
+
+# 1. writes out a .log and .fin file as if gaussian had run
+#    - .log file contains a big energy
+#    - .fin file is blank
+# 2. emails user so they can double check
+sub fakeGaussian {
+    my $mol = shift;
+    open flog, "> $mol.log" or die $!;
+    print flog "Normal termination (fake Gaussian)\n SCF Done:  E(UB+HF-LYP) =  10000.00000000\n";
+    close flog;
+    #system("mailx -s 'Conformer $mol deemed to be too crowded for submission.' $email < $mol.com ") ;
+}
+
+
+
+sub stripcom{
+    #stripcom("geometry_string"), returns stripped geometry string.
+    my($geometry, @file, $cm_flag, $bk, $cm_index, $i);
+    my($temp2, @temp);
+
+    $geometry = $_[0];
+    @file = split(/\n/,$geometry);
+    $cm_flag = 0;   # whether we've hit the (first) charge/multiplicity section or not.
+    $bk = 0;        #blank line counter for zmat section
+    @cominput = ();
+    $cm_index = 9999999;
+
+    for($i = 0; $i <= $#file; $i++){
+        #match the charge/multiplicity section.
+        if ($file[$i] =~/#/){
+            $theory =${theory}.${file[$i]};
+        }
+
+        if ($file[$i] =~/^[ \t]*-*\+*[ \t]*[0-9]{1,2}[ \t]*\+*[ \t]*[0-9]{1,2}[ \t]*$/){
+            $cm_flag +=1;         #means you only get the top geometry.
+            if ($cm_flag == 1){
+                #   push(@cominput, $file[$i]);       #put cm into array
+                $cm_index = $i;                #mark where cm is
+                $temp2 = $file[$i+1];              #get next line
+                $temp2 =~s/^[ \t]*//;             #strip leading whitespace
+                $temp2 =~s/[ \t]*$//;              #strip trailing whitespace
+                @temp = split(/[ \t]+/,$temp2);        #split
+                if ($temp[0] =~ /\b[a-z]{1,2}\b/i){        #see if zmat
+                    if (@temp == 1){
+                        $iszmat = 1;
+                    }else{
+                        if (@temp == 4){
+                            $iszmat = 0;
+                        }else{
+                            die "$temp2 : Not xyz or xmat!\n";
+                        }
+                    }
+                }else{
+                    die "$temp[0] : not an atom!!\n";
+                }
+            }
+        }
+        if ($i > $cm_index && $cm_flag == 1){    #discard useless header and footer
+            if($iszmat == 0 && $file[$i] =~/^[ \t]*[a-zA-Z]{1,2}[ \t]{1,}-?\+? *\.?[0-9]{1,}\.?[0-9]*[ \t]{1,}-?\+? *\.?[0-9]{1,}\.?[0-9]*[ \t]{1,}-?\+? *\.?[0-9]{1,}\.?[0-9]*[ \t]*$/){     #if zmat and a coordinate
+                push(@cominput, $file[$i]);
+            }
+            if($iszmat == 1){
+                if($file[$i] =~ /^[ \t]*$/){
+                    $bk+=1;             #count blank lines in zmat
+                }
+                if ($bk < 2){      # if zmat and before the end of it, then
+                    push(@cominput, $file[$i]);
+                }
+            }
+        }
+    }
+    $cominput = join("\n",@cominput);
+    return $cominput;
+}
+
+sub file2string {
+    # file2string("filename") : gets a txt file, turns it into a string.
+    my ($i,$file,$temp);
+    local $/;
+
+    open(INPUTFILE, $_[0]) ||die "Can't open $_[0] for reading.\n";
+    undef $/;
+    $file = <INPUTFILE>;
+    close(INPUTFILE)|| die "Can't close $_[0].\n";
+    return $file;
+}
+
+# usage: zmtCom2xyz($molecule, \@atom, \@X, \@Y, \@Z);
+sub zmtCom2xyz {
+    my $mol = shift;
+    $atom = shift;
+    my ($x,$y,$z) = @_;
+    
+    open COMFILE, "< $mol.com" or die "Couldn't open file $mol.com.\n\n$!";
+    
+    # this takes Gaussian input file with geometry given as
+    # Zmat, and converts it to the XYZ format (cartesians)
+    # This is an educational script, hence many comments.
+    # The script is a filter, i.e., should be used as
+    #   cat name.inp | g9xinp2xyz.pl > name.xyz
+    # where name.inp is the Gaussian input file and
+    # name.xyz is a file with cartesian coordinates a la XMol
+    # It is assumed that G9x input file has a format:
+    #   % part (e.g., checkpoint specs)
+    #   # keywords/links part
+    #     empty line
+    #   title lines
+    #     empty line
+    #   charge multiplicity line
+    #   zmatrix lines
+    #     empty line or "Variables"
+    #   symbolic variables for Z-matrix (if ZMAT has symbolic parameters)
+    #     empty line or "Constants"
+    #   symbolic constants for Z-matriz (if all references were not resolved yet)
+    #     empty line or line starting with "-"
+    #
+    #  Written by Jan Labanowski in July 1997 <jkl@ccl.net>
+
+    #
+
+    $keywords = "";
+    while($line = <COMFILE>) { # read next lines of keywords (route section)
+      last if ($line =~ /\s*\d\s+\d\s*/);
+    }
+
+
+    $natoms = 0;    #number of atoms found initialized
+    while ($line = <COMFILE>) {  # read molecule description lines
+      chop($line);
+      $line =~ tr/a-z/A-Z/;
+      $line =~ s/^\s+//;   # get rid of front and back spaces
+      $line =~ s/\s+$//;   # get rid of front and back spaces
+      if(($line !~ /\S/) ||
+         ($line =~ /variab/i) ||
+         ($line =~ /consta/i)) {  # if blank line or end of Zmat
+        last;              # exit the loop
+        }
+      if($natoms == 0) {   # first atom is only an atomic symbol
+        $symbol[$natoms] = $line;
+        # no parameters necessary for atom 1
+        ($bf[$natoms], $af[$natoms], $tf[$natoms]) =  (1, 1, 1);
+        }
+      else {
+        # split the line into individual fields:
+        (@fields) =  split(/\s+/, $line);   # split line into fields
+
+        # assumed most standard z-matrix form, so check number of entries
+        if((($#fields != 2) && ($natoms == 1)) &&
+           (($#fields != 4) && ($natoms == 2)) &&
+           (($#fields != 6) && ($natoms >= 3))) {
+          printf STDERR "Error in Z-Matrix for atom %d .\n\n", $natoms+1;
+          exit(2);   # abort 
+          }
+
+        for($i = $#fields+1; $i <8; $i++) {  # fill up with empty strings
+          $fields[$i] = "";
+          }
+
+        # parse fields  symbol_i  j  d_ij   k   theta_ijk  l  phi_ijkl 
+        ($symbol[$natoms],  # atom symbol
+         $bondat[$natoms],  # bonded atom
+         $blen[$natoms],    # bond length
+         $angat[$natoms],   # atom in an angle
+         $angle[$natoms],   # angle
+         $torat[$natoms],   # last atom in torsion angle
+         $tors[$natoms])    # torsion angle
+                              = (@fields);
+        # initialize flags for required parameters to "NotFound" status (i.e., 0)
+        if($natoms == 1) {
+          ($bf[$natoms], $af[$natoms], $tf[$natoms]) =  (0, 1, 1);
+          }
+        elsif($natoms == 2) {
+          ($bf[$natoms], $af[$natoms], $tf[$natoms]) =  (0, 0, 1);
+          }
+        else {
+          ($bf[$natoms], $af[$natoms], $tf[$natoms]) =  (0, 0, 0);
+          }
+        
+        # check if parameters are given as numbers (i.e., sign, possibly followed
+        # by digits, possibly followed by period, possibly followed by digits
+        # and containing at least one digit total. Set flag if number.
+        if(($blen[$natoms] =~ /^[-+]?[0-9]*\.?[0-9]*$/) &&
+           ($blen[$natoms] =~ /[0-9]+/)) {
+          $bf[$natoms] = 1;
+          }
+        if(($angle[$natoms] =~ /^[-+]?[0-9]*\.?[0-9]*$/) &&
+           ($angle[$natoms] =~ /[0-9]+/)) {
+          $af[$natoms] = 1;
+          }
+        if(($tors[$natoms] =~ /^[-+]?[0-9]*\.?[0-9]*$/) &&
+           ($tors[$natoms] =~ /[0-9]+/)) {
+          $tf[$natoms] = 1;
+          }
+
+        # Atom numbers must be all digits
+        if(($bondat[$natoms] !~ /^[0-9]+$/) ||
+           (($angat[$natoms] !~ /^[0-9]+$/) && ($natoms > 1)) ||
+           (($torat[$natoms] !~ /^[0-9]+$/) && ($natoms > 2))) {
+          printf STDERR "Error in atom definition for %d .\n\n", $i+1;
+          exit(2); 
+          }
+        }
+      $natoms++;
+      }
+
+    # check any symbolic parameters are given in the Z-mat
+    $parms_given = 0;
+    for($i = 0; $i < $natoms; $i++) {
+      if(($bf[$i] == 0) || 
+         ($af[$i] == 0) || 
+         ($tf[$i] == 0)) {
+        $parms_given = 1;     # symbolic parameters present
+        last;
+        }
+      }
+
+    if($parms_given == 1) { # read in symbolic parameters (variables) when present
+      while($line = <COMFILE>) {
+        $line =~ s/^\s//;        # trailing blanks out!
+        $line =~ s/\s$//;
+        $line =~ tr/a-z/A-Z/;    # convert to uppercase
+        if(($line !~ /\S/) ||
+           ($line =~ /const/i)) {  # if blank line or end of Variables
+          last;              # exit the loop
+          }
+
+        ($name, $value) = @fields = split(/[ =,]+/, $line);  # retrieve fields
+        if($#fields != 1) {
+          die "Wrong format on variables assignment line.\n\n";
+          }
+        if(($value !~ /^[-+]?[0-9]*\.?[0-9]*$/) ||
+           ($value !~ /[0-9]+/)) {
+          die "Wrong number format of variables assignment line.\n";
+          }
+
+
+        # substitute parameter in Z-Matrix. The symbolic parameter name is
+        # allowed to be preceded with a sign, so take this into account
+        $parameter_found = 0;
+        for($i = 0; $i < $natoms; $i++) {
+          if($bf[$i] == 0) {
+            if($blen[$i] =~ /^([-+]?)$name$/) {
+              $sign = $1 . "1.0";
+              $blen[$i] = $sign * $value;
+              $parameter_found = 1;
+              $bf[$i] = 1;
+              }
+            }
+
+          if($af[$i] == 0) {
+            if($angle[$i] =~ /^([-+]?)$name$/) {
+              $sign = $1 . "1.0";
+              $angle[$i] = $sign * $value;
+              $parameter_found = 1;
+              $af[$i] = 1;
+              }
+            }
+
+          if($tf[$i] == 0) {
+            if($tors[$i] =~ /^([-+]?)$name$/) {
+              $sign = $1 . "1.0";
+              $tors[$i] = $sign * $value;
+              $parameter_found = 1;
+              $tf[$i] = 1;
+              }
+            }
+          }
+        # parameter, if given, must appear at least once in Z-Matrix
+        if($parameter_found == 0) {
+          die "Parameter $name = $value does not appear in Z-Matrix.\n\n";
+          }
+
+        }
+      }
+
+    # check if all symbolic paramemters were resolved
+    $parms_given = 0;
+    for($i = 0; $i < $natoms; $i++) {
+      if(($bf[$i] == 0) || 
+         ($af[$i] == 0) || 
+         ($tf[$i] == 0)) {
+        $parms_given = 1;    # symbolic parameters present
+        last;
+        }
+      }
+    # if all parameters are not resloved, read in the Constants section
+    if($parms_given == 1) { # read in symbolic parameters (variables) when present
+      while($line = <COMFILE>) {
+        $line =~ s/^\s//;        # trailing blanks out!
+        $line =~ s/\s$//;
+        $line =~ tr/a-z/A-Z/;    # convert to uppercase
+        if($line =~ /const/i) {
+          next;
+          }
+        if(($line !~ /\S/) ||
+           ($line =~ /^\s*\-/)) {  # if blank line or - at the front
+          last;              # exit the loop
+          }
+        ($name, $value) = @fields = split(/[ =,]+/, $line);  # retrieve fields
+        if($#fields != 1) {
+          die "Wrong format of constants assignment line.\n\n";
+          }
+        if(($value !~ /^[-+]?[0-9]*\.?[0-9]*$/) ||
+           ($value !~ /[0-9]+/)) {
+          die "Wrong number format on constants assignment line.\n\n";
+          }
+
+        # substitute parameter in Z-Matrix. The symbolic parameter name is
+        # allowed to be preceded with a sign, so take this into account
+        $parameter_found = 0;
+        for($i = 0; $i < $natoms; $i++) {
+          if($bf[$i] == 0) {
+            if($blen[$i] =~ /^([-+]?)$name$/) {
+              $sign = $1 . "1.0";
+              $blen[$i] = $sign * $value;
+              $parameter_found = 1;
+              $bf[$i] = 1;
+              }
+            }
+
+          if($af[$i] == 0) {
+            if($angle[$i] =~ /^([-+]?)$name$/) {
+              $sign = $1 . "1.0";
+              $angle[$i] = $sign * $value;
+              $parameter_found = 1;
+              $af[$i] = 1;
+              }
+            }
+
+          if($tf[$i] == 0) {
+            if($tors[$i] =~ /^([-+]?)$name$/) {
+              $sign = $1 . "1.0";
+              $tors[$i] = $sign * $value;
+              $parameter_found = 1;
+              $tf[$i] = 1;
+              }
+            }
+          }
+
+        # parameter, if given, must appear at least once in Z-Matrix
+        if($parameter_found == 0) {
+          die "Parameter $name = $value does not appear in Z-Matrix.\n\n";
+          }
+        }
+      }
+
+    # check if all symbolic paramemters were reslolved
+    $parms_given = 0;
+    for($i = 0; $i < $natoms; $i++) {
+      if(($bf[$i] == 0) || 
+         ($af[$i] == 0) || 
+         ($tf[$i] == 0)) {
+        $parms_given = 1;    # symbolic parameters present
+        last;
+        }
+      }
+    if($parms_given == 1) {
+      print STDERR
+      "The follwing symbolic parameters are not resolved in Z-matrix:\n";
+      for($i = 0; $i < $natoms; $i++) {
+        if($bf[$i] == 0) {
+          printf STDERR "   %s for bond length for atom %d.\n", $blen[$i], $i;
+          }
+        if($af[$i] == 0) {
+          printf STDERR "   %s for angle value for atom %d.\n", $angle[$i], $i;
+          }
+        if($tf[$i] == 0) {
+          printf STDERR "   %s for torsion for atom %d.\n", $tors[$i], $i;
+          }
+        }
+      exit(2);
+      }
+
+
+    # output cartesian coordinates in XYZ XMol format
+    for ($i = 0; $i < $natoms; $i++) {
+        oneatom($i+1, $bondat[$i], $blen[$i], $angat[$i], $angle[$i],
+              $torat[$i], $tors[$i]);
+
+        $$atom[$i] = $symbol[$i];
+        $$z[$i] = $Zcoor[$i+1];
+        $$x[$i] = $Xcoor[$i+1];
+        $$y[$i] = $Ycoor[$i+1];
+
+        #printf STDOUT "%-3s  %12.6f  %12.6f  %12.6f\n",$$atom[$i],$$z[$i],$$x[$i],$$y[$i];
+
+    }
+
+    close COMFILE;
+
+}
+
+# -- Takes Z-mat line, i.e., 
+#        atomnumber, ibond, bondlen, iangle, bondangle, itors, torsangle
+#    and updates NONLOCAL arrays Xcoor, Ycoor, Zcoor which hold cartesian
+#    coordinates. It is assumed that atom numbering starts from 1
+#    (not from 0 as usually in C and perl)
+#    USES nonlocal array Xcoor, Ycoor, Zcoor where it stores coordinates
+#    It is assumed that angles are given in DEGREEs and bondlen in the same
+#    units in which cartesian coordinates will be given.
+#                  
+#             ibond -- iangle
+#              /             \ 
+#          atnum             itors
+#
+#  CAUTIONS -- contrary to the UNIX/PERL/C tradition, the
+#  arrays XYZ start from subscript 1 (not 0), and XYZ[0] are left unused,
+#  in other words, array element numbers correspond to atom numbers.
+
+sub oneatom {
+  # variables are declared local, so they do not interfere with
+  # variables outside this subroutine
+  local ($atnum,
+         $ibond, $bondlen,
+         $iangle, $bondangle,
+         $itors, $torsangle);
+  local ($deg2r);
+  local ($rinv, $aux);
+  local ($xa, $ya, $za);
+  local ($xb, $yb, $zb);
+  local ($xc, $yc, $zc);
+  local ($xx, $yy, $zz);
+
+  $atnum = $_[0];
+
+  if($atnum == 2) {
+    ($atnum, $ibond, $bondlen) = @_;
+    }
+  elsif ($atnum == 3) {
+    ($atnum, $ibond, $bondlen, $iangle, $bondangle) = @_;
+    }
+  elsif ($atnum > 3) {
+    ($atnum, $ibond, $bondlen, $iangle, $bondangle, $itors, $torsangle) = @_;
+    }
+
+  $deg2r = atan2(1.0, 1.0)*4.0/180.0;
+
+  # first atom in the origin of coordinate system      
+  if($atnum == 1) {
+    $Xcoor[1] = 0.0;
+    $Ycoor[1] = 0.0;
+    $Zcoor[1] = 0.0;
+    return;
+    }
+
+  # second atom on Z-axis, bondlen from the first atom
+  if($atnum == 2) {
+    $Xcoor[2] = 0.0;
+    $Ycoor[2] = 0.0;
+    $Zcoor[2] = $bondlen;
+    return;
+    }
+
+  # bonded atom coordinates
+  $x0 = $Xcoor[$ibond];
+  $y0 = $Ycoor[$ibond];
+  $z0 = $Zcoor[$ibond];
+
+  if($atnum == 3) {    # third atom placed on the Oxz plane
+    $Xcoor[3] = $x0+$bondlen*sin($bondangle*$deg2r);
+    $Ycoor[3] = 0.0;
+    $aux = $bondlen*cos($bondangle*$deg2r);
+    if($ibond == 1) {
+      $Zcoor[3] = $z0+$aux;
+      }
+    elsif ($ibond == 2) {
+      $Zcoor[3] = $z0-$aux;
+      }
+    return;
+    }
+
+
+  # vector from j-->k
+  $xx = $Xcoor[$iangle] - $Xcoor[$ibond];
+  $yy = $Ycoor[$iangle] - $Ycoor[$ibond];
+  $zz = $Zcoor[$iangle] - $Zcoor[$ibond];
+
+  # inverted vector length
+  $rinv = 1.0/sqrt($xx*$xx + $yy*$yy + $zz*$zz);
+
+  # unit vector ibond--->iangle
+  $xa = $xx*$rinv;
+  $ya = $yy*$rinv;
+  $za = $zz*$rinv;
+
+  # vector from ibond--->itors  
+  $xb = $Xcoor[$itors] - $Xcoor[$ibond];
+  $yb = $Ycoor[$itors] - $Ycoor[$ibond];
+  $zb = $Zcoor[$itors] - $Zcoor[$ibond];
+
+# unit vector ibond--->itors
+  $xc = $ya*$zb - $za*$yb;
+  $yc = $za*$xb - $xa*$zb;
+  $zc = $xa*$yb - $ya*$xb;
+
+  $rinv = 1.0/sqrt($xc*$xc + $yc*$yc + $zc*$zc);
+
+  $xc = $xc*$rinv;
+  $yc = $yc*$rinv;
+  $zc = $zc*$rinv;
+
+  $xb = $yc*$za - $zc*$ya;
+  $yb = $zc*$xa - $xc*$za;
+  $zb = $xc*$ya - $yc*$xa;
+
+  $zz = $bondlen*cos($bondangle*$deg2r);
+  $xx = $bondlen*sin($bondangle*$deg2r)*cos($torsangle*$deg2r);
+  $yy = $bondlen*sin($bondangle*$deg2r)*sin($torsangle*$deg2r);
+
+  $Xcoor[$atnum] = $x0 + $xa*$zz + $xb*$xx + $xc*$yy;
+  $Ycoor[$atnum] = $y0 + $ya*$zz + $yb*$xx + $yc*$yy;
+  $Zcoor[$atnum] = $z0 + $za*$zz + $zb*$xx + $zc*$yy;
+
+  return;
+  }
+
+__END__
+

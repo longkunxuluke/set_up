@@ -1,0 +1,89 @@
+#!/usr/bin/perl
+
+if (@ARGV < 2) { die "Syntax: chkfail list/filetype fileset outfileprefix\n" }
+
+$type = $ARGV[0];
+$files = $ARGV[1];
+$pre = $ARGV[2];
+
+if ($type =~ "list") {
+     $listfile = $files;
+     }
+else {
+     @FS = split(/\~/,$files);
+     $listfile = "list";
+     `ls *$FS[0]*$FS[1]*$FS[2]*$FS[3]* > $listfile`;
+     }
+
+$goodfile = "$pre.goodopt.list";
+$nconfile = "$pre.notconverged.list";
+$tsfile = "$pre.notmin.list";
+$failfile = "$pre.jobdied.list";
+open (GOOD, ">$goodfile") || die "couldn't open $goodfile for writing\n";
+open (NCON, ">$nconfile") || die "couldn't open $nconfile for writing\n";
+open (TS, ">$tsfile") || die "couldn't open $tsfile for writing\n";
+open (FAIL, ">$failfile") || die "couldn't open $failfile for writing\n";
+
+open (LST, "<$listfile") || die "couldn't open $listfile for reading\n";
+while (<LST>) {
+    chomp;
+    if ($type =~ "list") {
+        $_ = "$_.log";
+        } 
+    $filename = $_;
+#   print "$filename\n";
+    local $/;
+    open(LOG, $_) || die "Can't open $_ for reading.\n";
+    undef $/;
+    $ncon = "Y";
+    $fail = "Y";
+    @file = split(/\n\n+/,<LOG>,-1);
+    close(LOG)||die "Can't close $_.\n";
+    for ($i = 0; $i <= $#file; $i++){
+        if ($file[$i] =~ /Stati/){
+#           print " $i $file[$i]\n";
+#           print "sp\n";
+            $ncon = "N";
+        }
+        if ($file[$i]=~/GINC(.+?)@/s){
+            $ts = "N";
+            $fail = "N";
+            $file[$i] =~ s/ //g;
+            $file[$i] =~ s/\n//g;
+            $file[$i] =~ s/\r//g;
+            $file[$i] =~ s/\\/\n/g;
+            $file[$i] =~ s/,/ /g;
+            $file[$i] =~ s/ /  /g;
+            $file[$i] =~ s/  -/ -/g;
+#           print "$file[1]\n";
+            if ($file[$i] =~ "NImag=0") {
+#               print "NImag=0\n";
+                $ts = "N";
+            }
+            elsif ($file[$i] =~ "NImag") {
+#               print "NImag!=0\n";
+                $ts = "Y";
+            }
+            else {
+#               print "no NImag\n";
+                $fail = "Y";
+            }
+        }
+    }
+#   print "$fail $ncon $ts\n";
+    if ($fail =~ /Y/) {
+        print FAIL "$filename\n";
+    }
+    elsif ($ncon =~ /Y/) {
+        print NCON "$filename\n";
+    }
+    elsif ($ts =~ /Y/) {
+        print TS "$filename\n";
+    }
+    elsif (($ncon =~ /N/) && ($ts =~ /N/)) {
+        print GOOD "$filename\n";
+    }
+    else {
+        print "$filename\n";
+    }
+}

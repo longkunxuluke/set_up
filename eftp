@@ -1,0 +1,99 @@
+#!/usr/bin/perl
+use Math::Trig qw(atan acos tan);
+$pi = atan2(1,1) * 4;
+
+$theta = $ARGV[1];
+$phi = $ARGV[2];
+$strength = $ARGV[3];
+$a = ($theta)*$pi/180;
+$b = ($phi)*$pi/180;
+$c = (90-$theta)*$pi/180;
+$d = (90-$phi)*$pi/180;
+
+if (@ARGV < 4) { die "Syntax: eftp zmat_filename theta phi field_strength"}
+# theta = angle between Z axis and electric field (0 to 180 degrees), phi = angle between XZ plane and electric field (0 to 360 degrees) 
+# Field strength is in 10^-4 a.u.
+
+$file = $ARGV[0];
+$root = $ARGV[0];
+$root =~ s/.zmat//;
+#$root =~ s/.xyz//;     #if using xyz files, need to unhide first part of line 73
+$copy = "n";
+$name = $theta."T".$phi."P";
+
+# pick whichever $root matches your zmat filename
+    # $root =~ s/-COaxes/-CO_$name/;
+    # $root =~ s/-C4C7axes\+/-C4C7_$name/;
+    # $root =~ $root."-".$name;
+
+    print "$root\n";
+    $out[0] = $root."_".$name."_".$strength.".com";
+
+    open OUT, ">$out[0]"; 
+    {
+    $name0 = $root."_".$name."_".$strength;
+    print OUT "%chk=$name0.chk\n";
+    if ($root =~ "TS") {
+#       print OUT "# M062X/6-31G(2df,p) SCF=Tight INT(grid=ultrafine) OPT=(TS,calcfc,z-matrix,MaxStep=5,noeigentest,maxcyc=200) IOP(2/17=4) Nosymm Field=Read\n\n";
+#        print OUT "# M062X/6-31+G** SCF=Tight INT(grid=ultrafine) OPT=(TS,calcfc,z-matrix,noeigentest,maxcyc=200) IOP(2/17=4) Nosymm Field=Read\n\n";
+#       print OUT "# M062X/6-31+G(2df,p) SCF=Tight INT(grid=ultrafine) OPT=(TS,calcfc,z-matrix,noeigentest,maxcyc=200,MaxStep=2) IOP(2/17=4) Nosymm Field=Read\n\n";
+#       print OUT "# M062X/6-31G(2df,p) SCF=Tight INT(grid=ultrafine) SP IOP(2/17=4) Nosymm Field=Read\n\n";
+#       print OUT "# M062X/6-31+G(d) SCF=Tight INT(grid=ultrafine) SP IOP(2/17=4) Nosymm Field=Read\n\n";
+       print OUT "# M062X/6-31G(2df,p) SCF=Tight INT(grid=ultrafine) OPT=(TS,calcfc,z-matrix,noeigentest,maxcyc=200) SCRF=(SMD,Solvent=Acetonitrile) IOP(2/17=4) Nosymm Field=Read\n\n";
+    }
+    # things you may want to add:
+    # MaxStep=2,
+    # if solvent required add SCRF=(SMD,Solvent=Acetonitrile) **also don't forget to add to the frequencies section below
+    # ALWAYS INCLUDE "Nosymm" - otherwise your moecule will be rotated by gaussian
+    else {
+#        print OUT "# M062X/6-31G(2df,p) SCF=Tight INT(grid=ultrafine) OPT=(z-matrix,MaxStep=5) IOP(2/17=4)   Nosymm Field=Read\n\n";
+#        print OUT "# M062X/6-31+G** SCF=Tight INT(grid=ultrafine) OPT=(z-matrix) IOP(2/17=4)   Nosymm Field=Read\n\n";
+#        print OUT "# M062X/6-31+G** SCF=Tight INT(grid=ultrafine) OPT=(z-matrix,MaxStep=2) IOP(2/17=4) Nosymm Field=Read\n\n";
+#        print OUT "# M062X/6-31G(2df,p) SCF=Tight INT(grid=ultrafine) SP IOP(2/17=4) Nosymm Field=Read\n\n";
+#        print OUT "# M062X/6-31+G(d) SCF=Tight INT(grid=ultrafine) SP IOP(2/17=4) Nosymm Field=Read\n\n";
+        print OUT "# M062X/6-31G(2df,p) SCF=Tight INT(grid=ultrafine) OPT=(z-matrix) SCRF=(SMD,Solvent=Acetonitrile) IOP(2/17=4)   Nosymm Field=Read\n\n";
+    }
+    print OUT "$name0\n\n";
+    print OUT " 0 1\n";
+
+    open (FILE, "<$file") || die "couldn't open $file for reading\n";
+    while (<FILE>) {
+        $line = $_;
+        
+        print OUT "$line";
+    }
+    close(FILE);
+
+    $n = 0;
+    for ($i = $strength) {
+        $m = $n;
+        $n = $i;
+        $s = $n/10000;
+        $x = $s*sin($a)*sin($d);
+        $y = $s*sin($a)*sin($b);
+        $z = $s*sin($c);
+        $md = $m;
+        $nd = $n;
+#        print OUT "\n";                  #this line only necessary for xyz inputs, hide if zmat
+        printf OUT "%11.8f\n",$x;
+        printf OUT "%11.8f\n",$y;
+        printf OUT "%11.8f\n",$z;
+        print OUT "\n";
+              print OUT "--Link1--\n";
+              print OUT "%chk=$name0.chk\n";
+#      print OUT "# M062X/6-31G(2df,p) geom=check guess=read SCF=Tight INT(grid=ultrafine) Freq(NoRaman) IOP(2/17=4) Nosymm Field=Read\n";
+#      print OUT "# M062X/6-31+G** geom=check guess=read SCF=Tight INT(grid=ultrafine) Freq(NoRaman) IOP(2/17=4) Nosymm Field=Read\n";
+      print OUT "# M062X/6-31G(2df,p) geom=check guess=read SCF=Tight INT(grid=ultrafine) Freq(NoRaman) SCRF=(SMD,Solvent=Acetonitrile) IOP(2/17=4) Nosymm Field=Read\n";
+              print OUT "\n";
+              print OUT "$name0\n";
+              print OUT "\n";
+              print OUT " 0 1\n";
+              print OUT "\n";
+              printf OUT "%11.8f\n",$x;
+              printf OUT "%11.8f\n",$y;
+              printf OUT "%11.8f\n",$z;
+              print OUT "\n";
+    }
+    close(OUT);
+
+}

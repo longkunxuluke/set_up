@@ -1,0 +1,7 @@
+#!/bin/bash
+
+ls *$1*log > $1.temp.list;
+
+for i in `cat $1.temp.list`;do scfd $i ; done  | sort -n -r -k 2
+
+rm $1.temp.list;

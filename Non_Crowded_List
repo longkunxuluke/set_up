@@ -1,0 +1,15 @@
+#!/bin/bash
+
+export mol="$1";
+echo -n "" > $mol.todo.list;
+
+for a in `cat $mol.list`
+do
+    Crowded $mol.$a.com
+
+    Crowded $mol.$a.com | grep "badness rating = 0 " | sed 's/.com.*//' >> $mol.todo.list
+    Crowded $mol.$a.com | grep "badness rating = 1 " | sed 's/.com.*//' >> $mol.todo.list
+    Crowded $mol.$a.com | grep "badness rating = 2 " | sed 's/.com.*//' >> $mol.todo.list
+done
+
+

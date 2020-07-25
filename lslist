@@ -1,0 +1,4 @@
+#!/bin/tcsh
+
+
+/bin/ls $2*.$1 | sed "s/.$1//" > $2$1.list       

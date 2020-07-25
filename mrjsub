@@ -1,0 +1,179 @@
+#!/usr/bin/perl
+
+if (@ARGV < 1) { die "Syntax: mrjsub fileset [optional flags]
+  fileset is anything which identifies which files you are after - use ~ instead of * eg. mol~com will give results for mol1.com mol2.com...
+Optional Flags to be applied to all jobs (order doesn't matter):
+  -file             expects fileset to be an existing file with target filenames listed (rather than just a file type) 
+  -rproj [f81/x69]  choose project to run on 
+  -time [xh]        max runtime in hours
+  -mem [xmb]        max virtual memory in mb or gb
+  -progmem [xmb]    max program memory in mb or gb
+  -disk [xgb]       max disk space in mb or gb
+  -nproc [x]        number of processors
+  -e                submit to express queue 
+  -q                queue to submit to: normal, broadwell (bw), hugemem (hm), knightslanding (knl) 
+  -ver              program version eg. use 09c01 to use Gaussian 09, Revision C.01 (often resolves Internal Consistency Failure problem for MP2/GTMP2Large and can also help avoid geometry optimisations getting stuck in unproductive cycles)
+  -ichk             copy initial gaussian formatted checkpoint file to raijin - filename must match .com file.
+  -ochk             copy gaussian formatted checkpoint file back from raijin after calculation. \n\n" }
+
+$files = $ARGV[0];
+$type = "type"; 
+
+$machine = "raijin";
+$RJ = "RJN";
+$proj[0]=$ENV{PROJECT};
+$proj[1]=$ENV{PROJECT2};
+$ruser = $ENV{REMOTE_USER};
+$maxQ{x69} = 690; # These limits are outdated
+$maxQ{f81} = 690; # Feel free to change if needed
+$maxU{x69} = 650; # however make sure you don't run so many jobs
+$maxU{f81} = 650; # that others are blocked out.
+if (!($ENV{PROJ1GRANT})) {
+    die "Please edit your .bashrc to include the following lines and source: \nexport PROJECT=f81\nexport PROJECT2=x69\nexport PROJ1GRANT=400\nexport PROJ2GRANT=750\n";    
+}
+else {
+    $grant{$proj[0]} = $ENV{PROJ1GRANT};
+    $grant{$proj[1]} = $ENV{PROJ2GRANT};
+}
+
+$rproj = $proj[0];
+$projtest = "y";
+$utime = "";
+$tflag = "";
+$umem = "";
+$upmem = "";
+$memflag = "";
+$ujobfs = "";
+$jfsflag = "";
+$unproc = "";
+$procflag = "";
+$expflag = "";
+$queueflag = "";
+$queue = "";
+$ovw = "n";
+
+for ($i = 0; $i <= 30; $i++) {
+    if ($ARGV[$i]){
+        if ($ARGV[$i] =~ /-file/) {
+             $type = "list";
+             $listfile = $files;
+        }
+        if (($ARGV[$i] =~ /-rproj/) || ($ARGV[$i] =~ /-proj/)) {
+            $rproj = $ARGV[$i+1];   
+            $projtest = "n";
+        }
+        if (($ARGV[$i] =~ /^-lt/) || ($ARGV[$i] =~ /^-time/)) {
+            $tflag = $ARGV[$i];
+            $utime = $ARGV[$i+1];       
+        }
+        if (($ARGV[$i] =~ /^-lw/) || ($ARGV[$i] =~ /^-mem/)) {
+            $memflag = $ARGV[$i];
+            $umem = $ARGV[$i+1];       
+        }
+        if (($ARGV[$i] =~ /^-pm/) || ($ARGV[$i] =~ /^-progmem/)) {
+            $pmemflag = $ARGV[$i];
+            $upmem = $ARGV[$i+1];       
+        }
+        if (($ARGV[$i] =~ /^-lf/) || ($ARGV[$i] =~ /^-jobfs/) || ($ARGV[$i] =~ /^-disk/)) {
+            $jfsflag = $ARGV[$i];
+            $ujobfs = $ARGV[$i+1];       
+        }
+        if ($ARGV[$i] =~ /^-nproc/) {
+            $procflag = $ARGV[$i];
+            $unproc = $ARGV[$i+1];       
+        }
+        if ($ARGV[$i] =~/^-e/){
+            $expflag = $ARGV[$i];
+        }
+        if ($ARGV[$i] =~/^-q/){
+            $queueflag = $ARGV[$i];       
+            $queue = $ARGV[$i+1];       
+        }
+        if ($ARGV[$i] =~ /^-ver/){
+            $ver = "-ver $ARGV[$i+1]";
+        }
+        if ($ARGV[$i] =~/^-o/){
+            $ovw = "y";
+        }
+        if ($ARGV[$i] =~/^-ichk/){
+            $ichk = "-ichk";
+        }
+        if ($ARGV[$i] =~/^-ochk/){
+            $ochk = "-ochk";
+        }
+    }
+}
+
+if ($type =~ "type") {
+     @FS = split(/\~/,$files);
+     $listfile = "list";
+     `ls *$FS[0]*$FS[1]*$FS[2]*$FS[3]* > $listfile`;
+     }
+
+if ($projtest =~ "y") {
+ for ($i = 0; $i <= 1; $i++) {
+     $su[$i] = "y";
+     @alloctime = split(/\s+/,`ssh $machine -l \$REMOTE_USER nci_account -P $proj[$i] | grep 'Overall' `);
+     $freetime[$i] = $grant{$proj[$i]} - $alloctime[6]/1000;
+     if ($alloctime[6]/1000 > $grant{$proj[$i]}) { 
+         $su[$i] = "n";
+     }
+     @totalQ = split(/\s+/,`ssh $machine -l \$REMOTE_USER /opt/pbs/default/bin/nqstat -P $proj[$i] | grep ' $ruser ' | grep ' $proj[$i] ' | wc `);
+     @Queuejob = `ssh $machine -l \$REMOTE_USER /opt/pbs/default/bin/nqstat -P $proj[$i] | grep ' $proj[$i] ' | sed 's/.*MB//' | sed 's/.  *GB//'`;
+     $m[$i] = $totalQ[1];
+     $n[$i] = $#Queuejob;
+     $mu[$i] = $maxU{$proj[$i]};
+     $nu[$i] = $maxQ{$proj[$i]};
+     if (($totalQ[1] >= $maxU{$proj[$i]}) || ($#Queuejob+1 >= $maxQ{$proj[$i]})) { $space[$i] = "n" }
+     else { $space[$i] = "y" }
+     printf "%3s   KSU available: %4.0f   User jobs: %3i   Total jobs: %3i ", $proj[$i], $freetime[$i], $m[$i], $n[$i];
+#    print "  Tests: $su[$i] $space[$i]\n";
+     print "\n";
+     }
+
+ if ($su[0] =~ "y") {
+    if ($space[0] =~ "y") { $j = 0 }
+    elsif ($space[1] =~ "y") { $j = 1 }
+    else { $j = 0 }
+    }
+ elsif ($su[1] =~ "y") { $j = 1 }
+ else {
+    if ($space[1] =~ "y") { $j = 1 }
+    elsif ($space[0] =~ "y") { $j = 0 }
+    else { $j = 1 }
+    }
+ $rproj = $proj[$j];
+ }
+
+open (LST, "<$listfile") || die "couldn't open $listfile for reading\n";
+while (<LST>) {
+     chomp;
+     if ($type =~ "list") {
+          $file = "$_.com";
+          } 
+     else {
+          $file = $_;
+          }
+     $log = $file;
+     $log =~ s/com/log/;
+     $out =~ s/ini/out/;
+     $out =~ s/run/out/;
+     $k = $j;
+     if (($projtest =~ "y") && (($m[$j] >= $mu[$j]) || ($n[$j] >= $nu[$j]))) { 
+         if ($j == 0) { $k = 1 } else { $k = 0 }
+         $rproj = $proj[$k];
+         }
+#    print "Submitting $file on project $rproj\n";
+     if (($file =~ /com$/) && ((! -e $log) || ($ovw =~ "y"))) {
+#        print "rjsub $file -rproj $rproj -uq $m[$k] -tq $n[$k] $tflag $utime $memflag $umem $jfsflag $ujobfs $procflag $unproc $expflag $ichk $ochk\n";
+         system("rjsub $file -rproj $rproj -uq $m[$k] -tq $n[$k] $queueflag $queue $tflag $utime $memflag $umem $pmemflag $upmem $jfsflag $ujobfs $procflag $unproc $expflag $ichk $ochk $ver");
+         }
+     if (($file =~ /ini$/) && ((! -e $out) || ($ovw =~ "y"))) {
+         system("rjsub $file -rproj $rproj -uq $m[$k] -tq $n[$k] $queueflag $queue $tflag $utime $memflag $queue ag $umem $pmemflag $upmem $jfsflag $ujobfs $procflag $unproc $expflag");
+         }
+     if (($file =~ /run$/) && ((! -e $out) || ($ovw =~ "y"))) {
+         system("rjsub $file -rproj $rproj -uq $m[$k] -tq $n[$k] $queueflag $queue $tflag $utime $memflag $umem $pmemflag $upmem $jfsflag $ujobfs $procflag $unproc $expflag");
+         }
+     $m[$j]++;
+     $n[$j]++;
+     }

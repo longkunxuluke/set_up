@@ -1,0 +1,1832 @@
+#! /usr/bin/perl -w
+# Modified by Naomi Haworth 17/3/2015
+
+#
+# If you haven't have environment set up, maker sure you Chage $HOME setting!!!!  
+#
+# USAGE rotbond.pl $mol 
+# INPUT $mol.xyz and $mol.bonds where $mol.bonds are a file containing two columns with atomic number of bonds
+# if a third column is presented, rotation angle can be manually set instead.
+# OUTPUT $mol.abc.com and $mol.a.rfg where com is all the conformer files and rfg is the rotational fragment
+# 
+# 
+
+   #####################################################################
+   #
+   #  Works out the inter-atomic distances in a molecule, and also
+   #  determines if they are 'bonded' according to the covalent radii.
+   #
+   #####################################################################
+
+#   use Math::Matrix;
+#   use Iterator::Array::Jagged;
+## Perl Library /System/Library/Perl/5.8.8/
+## Require Math/Matrix.pm  Iterator/Array/Jagged.pm
+## http://search.cpan.org/~ulpfr/Math-Matrix-0.5/Matrix.pm
+## http://search.cpan.org/~johnd/Iterator-Array-Jagged-0.05/lib/Iterator/Array/Jagged.pm
+
+   $print = 0;
+   $tsbond1 = 0;
+   $tsbond2 = 0;
+   for ($i = 1; $i <= 3; $i++) {
+       $hbond1[$i] = 0;
+       $hbond2[$i] = 0;
+   }
+
+   $HOME="home/$ENV{REMOTE_DIR}/$ENV{REMOTE_USER}"; #<--- change here!!!
+   
+   $mol = $ARGV[0];
+   @rot = ('a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z');
+   $rot_i = 0;
+   $Rassolov = 0;
+   $solRassolov = 0;
+   $heavy = 0;
+   $heavybasis = "lacvp + polarisation + ecp";
+
+       @symbo=("xx","h" ,                                                                                "he",
+           "li","be",                                                   "b", "c", "n", "o", "f","ne",
+           "na","mg",                                                  "al","si", "p", "s","cl","ar",
+           "k" ,"ca","sc","ti", "v","cr","mn","fe","co","ni","cu","zn","ga","ge","as","se","br","kr",
+           "rb","sr", "y","zr","nb","mo","tc","ru","rh","pd","ag","cd","in","sn","sb","te", "i","xe",
+           "cs","ba",
+           "la","ce","pr","nd","pm","sm","eu","gd","tb","dy","ho","er","tm","yb","lu",
+           "hf","ta", "w","re","os","ir","pt","au","hg","tl","pb","bi","po","at","rn",
+           "fr","ra",
+           "ac","th","pa", "u","np","pu","am","cm","bk","cf","es","fm","md","no","lr");
+
+   $pi = atan2(1,1) * 4;
+
+   $nat = 0;
+   (@A,@X,@Y,@Z,@B) = ();
+
+   open XYZ, "$mol.xyz" or die $!;
+   while (<XYZ>) {
+       next if (m/molecule/);
+       next if (m/scf/);
+       last if (m/end/);
+       @F = split(/\s+/,$_);
+       next unless(m/\S/ && @F > 2);
+       $nat++;
+       @_ = split(/\s+/,$_);
+       ($z,$y,$x,$a) = reverse(@_); 
+       $a = ToSymbol($a) if ($a =~ m/\d/);
+       #print "$a\n$x  $y  $z\n";
+       push(@A,$a); push(@X,$x); push(@Y,$y);  push(@Z,$z);
+       $atomn = atomicN($a) ;
+       if ($atomn > 18){
+           $Rassolov = 1;
+           $solRassolov = 1;
+           if ($atomn > 36){
+               $heavy=1;
+               $heavyatom = $a;
+           }
+       }
+   }
+   close XYZ;
+
+    $radiiline= "";
+    $genbasis = "";
+    $pseudo = "";
+    $scrf = "";
+    $heavyline = "";
+    $nonelec ="";
+    $solvnline = "";
+    $qnew = "";
+
+    $charge = &promptUser(" What is the charge of $mol?","0");
+    $multiplicity = &promptUser(" What is the multiplicity of $mol?","1");
+    $level = &promptUser(" What level of theory do you want to use?","M062X");
+#   $level = &promptUser(" What level of theory do you want to use?","B3LYP");
+    $basis = &promptUser(" What basis set do you want to use?","6-31+G*");
+#   $basis = &promptUser(" What basis set do you want to use?","6-31G*");
+    if (($basis =~ /6-31G\*/) || ($basis =~ /6-31\+G\*/) || ($basis =~ /6-31G\(d\)/) || ($basis =~ /6-31\+G\(d\)/)) {
+        $qnew = &promptUser("  Do you want to use the Rassolov version?","Y");
+        if ($qnew =~ /[yY]/) { $Rassolov = 1 }
+    }
+    $optight = &promptUser(" Do you want to use Opt=Tight?","No");
+    $opts = &promptUser(" Is this an optimization for transition structure?","No");
+   if ($opts eq "No"){
+       if ($optight eq "No") {
+           $opts = "Opt";
+       }
+       else {
+           $opts = "OPT(Tight)";
+       }
+   }
+   else{
+       print"\n If this is a bond forming/breaking transition state, Please specify the atomic number of the two atoms forming the bond:\n\n";
+       $tsbond1 = &promptUser(" what is the first atom:","");
+       $tsbond2 = &promptUser(" what is the second atom:","");
+       if ($optight eq "No") {
+           $opts = "OPT(TS,calcfc,noeigentest,maxcyc=200)";
+       }
+       else {
+           $opts = "OPT(TS,calcfc,noeigentest,maxcyc=200,tight)";
+       }
+   }
+    $optcpx = &promptUser(" Is this an optimization for a complex?","No");
+    $nhb = 0;
+   if ($optcpx eq "No"){
+   }
+   else{
+       $nhb = &promptUser("  Please specify the number of hydrogen bonds (must be <= 3):","1");
+       for ($ij = 1; $ij <= $nhb; $ij++) {
+            print"  Please specify the atom numbers of the two atoms forming hydrogen bond $ij:\n";
+            $hbond1[$ij] = &promptUser("   What is the first atom:","");
+            $hbond2[$ij] = &promptUser("   What is the second atom:","");
+        }
+
+   }
+    $solvent = &promptUser(" Do you want to consider solvent effects?","No");
+#   $opts="No";
+#   $solvent="No";
+#   $level="";
+#   $basis="";
+#   $charge="";
+#   $multiplicity="";
+
+   
+
+   $sollevel = $level;
+   if ($solvent ne "No"){
+       $solv = &promptUser(" What solvent model do you want to use (uaks, smd)?","smd");
+       $solvent = &promptUser(" What is the solvent you want to use (toluene,etac,h2o)?","h2o");
+       if ($qnew !~ [yYnN]) {
+           $qnew = &promptUser(" Do you want to use the Rassolov 6-31(+)G* basis sets for the solvent calculations?","Y");
+           if ($qnew =~ /[yY]/) { $solRassolov = 1 }
+       }
+       $solgenbasis = "";
+       if ($solv eq "uaks") {
+           print "PCM(uaks) was parameterised using B3LYP/6-31(+)G* - this model chemisty must (and will) be used.\n";
+           $sollevel = "B3LYP";
+           if ($basis =~ /\+/) {
+               $solbas = "6-31+G*";
+           }
+           else {
+               $solbas = "6-31G*";
+           }
+           if ($solvent eq "toluene"){
+               $scrf = "SCRF=(CPCM,Solvent=$solvent,Read)";
+               $scrf2 = "SCRF=(CPCM,Solvent=$solvent,Read,dovac,self)";
+               $radiiline = "RADII=UAKS\nAlpha=1.3\n";
+               $nonelec = "Cav\nDis\nRep\n";
+               $solvnline = "";
+           }
+           elsif ($solvent eq "etac"){
+               $scrf = "SCRF=(CPCM,Solvent=DiethylEther,Read)";
+               $scrf2 = "SCRF=(CPCM,Solvent=DiethylEther,Read,dovac,self)";
+               $radiiline = "RADII=UAKS\nAlpha=1.2\n";
+               $nonelec = "Cav\nDis\nRep\n";
+               $solvnline = "DENSITY=0.00613\nRSOLV=2.648\nEPS=5.9867\nVMOL=89.4\n";
+           }
+           elsif ($solvent eq "h2o"){
+               $scrf = "SCRF=(PCM,Solvent=water,Read)";
+               $scrf2 = "SCRF=(PCM,Solvent=water,Read,dovac,self)";
+               $radiiline = "RADII=UAKS\nAlpha=1.2\n";
+               $nonelec = "Cav\nDis\nRep\n";
+               $solvnline = "";
+           }
+       }
+       elsif ($solv eq "smd") {
+           $sollevel = &promptUser(" SMD was parameterised with M052X however other functionals are acceptable to use.\n What level of theory do you want to use with the solvent model?","M052X");
+           if ($basis =~ /\+/) {
+               $solbas = "6-31+G*";
+           }
+           else {
+               $solbas = "6-31G*";
+           }
+           $scrf = "SCRF=(SMD,Solvent=$solvent)";
+           $scrf2 = "SCRF=(SMD,Solvent=$solvent,dovac,self)";
+           $solvnline ="";
+           $radiiline = "";
+           $nonelec = "";
+       }
+
+       #$scrf = "SCRF=($pcm,Solvent=$solvent,Read)";
+       #$nonelec = "CAV\nDIS\nREP\n";
+       #if ($level =~/B/i or $level =~/M/i){
+       #    $radiiline = "Radii=UAKS Alpha=1.2\n\n";
+           #$radiiline = "SCFVAC\n\n"; doesn't work in g09
+           #}
+           #elsif ($level =~ /HF/i){
+           #$radiiline = "Radii=UAHF\n\n";
+           #}
+           #else{
+           #$radii = &promptUser(" What radii do you want to use?","UFF");
+           #$radiiline = "Radii=$radii SCFVAC\n\n";
+           #}
+   }
+
+   $freq = &promptUser(" Do you want to calculate frequencies?","No");
+   $solfreqtype = "na";
+   if (($solvent ne "No") && ($freq ne "No")) {
+       $solfreqtype = &promptUser(" Do you want to 1. calculate frequencies in solution (recommended)\n             or 2. calculate frequencies in gas phase and apply dGsoln?","1");
+   }
+
+   $grid="INT(grid=ultrafine)";
+   if (($level =~ /CCSD/) || ($level =~ /ccsd/) || ($level =~ /QCI/) || ($level =~ /qci/) || ($level =~ /mp2/) || ($level =~ /mp2/) || ($level =~ /HF/) || ($level =~ /hf/)) {
+       $grid = "";
+   }
+   if (($basis eq "6-31G*" or $basis eq "6-31G(d)") and $Rassolov == 1){
+       $basis = "gen 6D";
+       $genbasis = "@/$HOME/Basis/6-31Gd.gbs/N\n\n";
+       $heavybasis = "lacvp + polarisation + ecp";
+   }
+   elsif ( ($basis eq "6-31+G*" or $basis eq "6-31+G(d)") and $Rassolov == 1){
+       $basis = "gen 6D";
+       $genbasis = "@/$HOME/Basis/6-31pGd.gbs/N\n\n";
+       $heavybasis = "lacvp + polarisation + diffuse + ecp";
+   }
+   $solRassolov = 0;
+   if ($solvent ne "No" and ($solbas eq "6-31G*" or $solbas eq "6-31G(d)") and $solRassolov == 1){
+       print "$solvent $solbas $solRassolov\n";
+       $solbas = "gen 6D";
+       $solgenbasis = "@/$HOME/Basis/6-31Gd.gbs/N\n\n";
+       $heavybasis = "lacvp + polarisation + ecp";
+   }
+   elsif ($solvent ne "No" and ($solbas eq "6-31+G*" or $solbas eq "6-31+G(d)") and $solRassolov == 1){
+       print "$solvent $solbas $solRassolov\n";
+       $solbas = "gen 6D";
+       $solgenbasis = "@/$HOME/Basis/6-31pGd.gbs/N\n\n";
+       $heavybasis = "lacvp + polarisation + diffuse + ecp";
+   }
+
+   if ($heavy == 1){
+       print "\n use $heavybasis for $heavyatom\n";
+       $pseudo = "pseudo=read";
+       $heavyline = "@/$HOME/Basis/lacvp.ecp/N\n\n";
+   }
+
+
+   for $i (0..$nat-1) {
+       for $j (0..$nat-1) {
+           $b = ($X[$i]-$X[$j])**2 + ($Y[$i]-$Y[$j])**2 + ($Z[$i]-$Z[$j])**2;
+           $b = sprintf("%6.4f",sqrt($b));
+           $B[$i][$j] = $b;
+       }
+   }
+
+   print "\n";
+
+   open BONDLIST, "$mol.bonds" or die $!;
+   while (<BONDLIST>) {
+       @abc = split(/\s+/,$_);
+       if ($#abc == 1){
+           ($atom1,$atom2) = @abc;
+           $data2[$rot_i][0] = $atom1;
+           $data2[$rot_i][1] = $atom2;
+           DistMatrix($nat,\@A,\@B,$rot_i,$atom1,$atom2); # print out connectivity table but don't print out distance matrix
+           if ($n_group[$rot_i] == 2){
+               #@theta = (0,$pi);
+               @aaa = [$rot[$rot_i]."1",$rot[$rot_i]."4"];
+               push(@data1,@aaa);
+           }
+           elsif ($n_group[$rot_i] == 3){
+               #@theta = (0,120/180*$pi,240/180*$pi);
+               @aaa = [$rot[$rot_i]."1",$rot[$rot_i]."2",$rot[$rot_i]."3"];
+               push(@data1,@aaa);
+           }
+       }
+       elsif ($#abc ==2) {
+           ($atom1,$atom2,$theta_user) = @abc;
+           $data2[$rot_i][0] = $atom1;
+           $data2[$rot_i][1] = $atom2;
+           DistMatrix($nat,\@A,\@B,$rot_i,$atom1,$atom2); # print out connectivity table but don't print out distance matrix
+           $data2[$rot_i][2] = $theta_user/180*$pi;
+           if ($theta_user =~/180/){
+               #@theta = (0,$pi);
+               @aaa = [$rot[$rot_i]."1",$rot[$rot_i]."4"];
+               push(@data1,@aaa);
+           }
+           elsif ($theta_user =~/120/){
+               #@theta = (0,120/180*$pi,240/180*$pi);
+               @aaa = [$rot[$rot_i]."1",$rot[$rot_i]."2",$rot[$rot_i]."3"];
+               push(@data1,@aaa);
+           }
+           elsif ($theta_user =~/60/){
+               #@theta = (0,60,120,180,240,300);
+               @aaa = [$rot[$rot_i]."1",$rot[$rot_i]."5",$rot[$rot_i]."2",$rot[$rot_i]."4",$rot[$rot_i]."3",$rot[$rot_i]."6"];
+               push(@data1,@aaa);
+           }
+           elsif ($theta_user =~/90/){
+               #@theta = (0,90,180,270)
+               @aaa = [$rot[$rot_i]."1",$rot[$rot_i]."7",$rot[$rot_i]."4",$rot[$rot_i]."8"];
+               push(@data1,@aaa);
+           }
+           else{
+               die ("Sorry, you have specified $theta_user degree rotation, however we haven't implement other than 2/3/4/6 folds rotations");
+           }
+       }
+       else{
+           die "format in $mol.bonds is incorrect\n two columns or three columns only\n ";
+       }
+
+       $rot_i++;
+   }
+   close BONDLIST;
+
+   for $i (0..$rot_i-1){
+       if ($data2[$i][2] ){
+           print " for bond ",$data2[$i][0],"-",$data2[$i][1],", rotate ",$data2[$i][2]*180/$pi," degree\n";
+       }
+       else{
+           print " for bond ",$data2[$i][0],"-",$data2[$i][1],", rotate ",360/$n_group[$i]," degree\n";
+       }
+   }
+
+
+   print "\n";
+
+   open LIST, ">$mol.list" or die $!;
+
+   my $iterator = Iterator::Array::Jagged->new( data => \@data1 );
+   while( my @set = $iterator->next )
+   {
+       for $i (0..$nat-1) {
+           $original[$i] = new Math::Matrix( [$X[$i]],[$Y[$i]],[$Z[$i]],[1.0] );
+       }
+       if ($print){
+           print "Confmer sets: '" . join(" ", @set) . "'\n";
+       }
+
+       for $g (0..$#set){
+           if ($set[$g] =~/1/){
+               $theta = 0.;
+           }
+           elsif($set[$g] =~/2/){
+               $theta = 120/180*$pi;
+           }
+           elsif($set[$g] =~/3/){
+               $theta = 240/180*$pi;
+           }
+           elsif($set[$g] =~/4/){
+               $theta = $pi;
+           }
+           elsif($set[$g] =~/5/){
+               $theta = 60/180*$pi;
+           }
+           elsif($set[$g] =~/6/){
+               $theta = 300/180*$pi;
+           }
+           elsif($set[$g] =~/7/){
+               $theta = 90/180*$pi;
+           }
+           elsif($set[$g] =~/8/){
+               $theta = 270/180*$pi;
+           }
+
+           Rotate($data2[$g][0],$data2[$g][1],$theta);
+
+           foreach $i (@{$frag_atoms[$g]}) {
+               $original[$i] = Math::Matrix::multiply($TRRRRRT,$original[$i]);
+           }
+       }
+
+
+       $name = join("",@set);
+       $name =~s/\w1//g;
+#       $name =~s/4/2/g;
+       if ($name =~ /a/){
+       }
+       else{
+           $name =~s/^/a1/g;
+       }
+
+       print LIST "$name\n";
+
+#      # print xyz for debugging
+#      open ROTXYZ, ">$mol.$name.xyz" or die $!;
+#      print ROTXYZ "$nat\n\n"; # for XYZ format
+#      for $i (0..$nat-1) {
+#          printf ROTXYZ "$A[$i]\t%f\t%f\t%f\n",$original[$i]->[0][0],$original[$i]->[1][0],$original[$i]->[2][0];
+#      }
+#      print ROTXYZ "\n";
+#      close ROTXYZ;
+#      #end here
+       
+     if ($solfreqtype !~ 2) {
+       open ROTCOM, ">$mol.$name.com" or die $!;
+       if ($freq =~ /[Yy]/) { print ROTCOM "%chk=check.chk\n" }
+       print ROTCOM "#$sollevel/$basis SCF=Tight IOP(2/17=4) $grid $opts $pseudo $scrf\n\n";
+       print ROTCOM "@set\n\n";
+       print ROTCOM "$charge $multiplicity\n";
+       for $i (0..$nat-1) {
+           printf ROTCOM "$A[$i]\t%f\t%f\t%f\n",$original[$i]->[0][0],$original[$i]->[1][0],$original[$i]->[2][0];
+       }
+       print ROTCOM "\n";
+       print ROTCOM "$genbasis";
+       print ROTCOM "$heavyline";
+       print ROTCOM "$radiiline";
+       print ROTCOM "$nonelec";
+       print ROTCOM "$solvnline";
+       print ROTCOM "\n\n";
+       if ($freq =~ /[Yy]/) {
+           print ROTCOM "--Link1--\n";
+           print ROTCOM "%chk=check.chk\n";
+           print ROTCOM "#$sollevel/$basis Geom=check Guess=tcheck SCF=Tight IOP(2/17=4) $grid Freq(NoRaman) $pseudo $scrf\n\n";
+           print ROTCOM "@set\n\n";
+           print ROTCOM "$charge $multiplicity\n";
+           print ROTCOM "\n";
+           print ROTCOM "$genbasis";
+           print ROTCOM "$heavyline";
+           print ROTCOM "$radiiline";
+           print ROTCOM "$nonelec";
+           print ROTCOM "$solvnline";
+           print ROTCOM "\n\n";
+       }
+#      print ROTCOM "--Link1--\n";
+#      print ROTCOM "%chk=check.chk\n";
+#      print ROTCOM "#$level/$basis SCF=Tight IOP(2/17=4) $grid $opts $pseudo \n\n";
+#      print ROTCOM "@set\n\n";
+#      print ROTCOM "$charge $multiplicity\n";
+#      print ROTCOM "\n";
+#      print ROTCOM "$genbasis";
+#      print ROTCOM "\n\n";
+#      print ROTCOM "--Link1--\n";
+#      print ROTCOM "%chk=check.chk\n";
+#      print ROTCOM "#$level/$basis Geom=check Guess=tcheck SCF=Tight IOP(2/17=4) $grid Freq(NoRaman) $pseudo \n\n";
+#      print ROTCOM "@set\n\n";
+#      print ROTCOM "$charge $multiplicity\n";
+#      print ROTCOM "\n";
+#      print ROTCOM "$genbasis";
+#      print ROTCOM "\n";
+       close ROTCOM;
+     }
+     else {
+       open ROTCOM, ">$mol.$name.com" or die $!;
+       if ($freq =~ /[Yy]/) { print ROTCOM "%chk=check.chk\n" }
+       print ROTCOM "#$level/$basis SCF=Tight IOP(2/17=4) $grid $opts $pseudo \n\n";
+       print ROTCOM "@set\n\n";
+       print ROTCOM "$charge $multiplicity\n";
+       for $i (0..$nat-1) {
+           printf ROTCOM "$A[$i]\t%f\t%f\t%f\n",$original[$i]->[0][0],$original[$i]->[1][0],$original[$i]->[2][0];
+       }
+       print ROTCOM "\n";
+       print ROTCOM "$genbasis";
+       print ROTCOM "\n\n";
+       print ROTCOM "--Link1--\n";
+       print ROTCOM "%chk=check.chk\n";
+       print ROTCOM "#$level/$basis Geom=check Guess=tcheck SCF=Tight IOP(2/17=4) $grid Freq(NoRaman) $pseudo \n\n";
+       print ROTCOM "@set\n\n";
+       print ROTCOM "$charge $multiplicity\n";
+       print ROTCOM "\n";
+       print ROTCOM "$genbasis";
+       print ROTCOM "\n\n";
+       print ROTCOM "--Link1--\n";
+       print ROTCOM "%chk=check.chk\n";
+       print ROTCOM "#$sollevel/6-31G* Geom=check Guess=tcheck SCF=Tight IOP(2/17=4) $grid $opts $pseudo $scrf\n\n";
+       print ROTCOM "@set\n\n";
+       print ROTCOM "$charge $multiplicity\n";
+       print ROTCOM "\n";
+       print ROTCOM "$solgenbasis";
+       print ROTCOM "$heavyline";
+       print ROTCOM "$radiiline";
+       print ROTCOM "$nonelec";
+       print ROTCOM "$solvnline";
+       print ROTCOM "\n\n";
+       print ROTCOM "--Link1--\n";
+       print ROTCOM "%chk=check.chk\n";
+       print ROTCOM "#$sollevel/6-31G* Geom=check Guess=tcheck SCF=Tight IOP(2/17=4) $grid Freq(NoRaman) $pseudo $scrf\n\n";
+       print ROTCOM "@set\n\n";
+       print ROTCOM "$charge $multiplicity\n";
+       print ROTCOM "\n";
+       print ROTCOM "$solgenbasis";
+       print ROTCOM "$heavyline";
+       print ROTCOM "$radiiline";
+       print ROTCOM "$nonelec";
+       print ROTCOM "$solvnline";
+       print ROTCOM "\n\n";
+       print ROTCOM "--Link1--\n";
+       print ROTCOM "%chk=check.chk\n";
+       print ROTCOM "#$sollevel/6-31G* Geom=check Guess=tcheck SCF=Tight IOP(2/17=4) $grid $pseudo $scrf2\n\n";
+       print ROTCOM "@set\n\n";
+       print ROTCOM "$charge $multiplicity\n";
+       print ROTCOM "\n";
+       print ROTCOM "$solgenbasis";
+       print ROTCOM "$heavyline";
+       print ROTCOM "$radiiline";
+       print ROTCOM "$nonelec";
+       print ROTCOM "$solvnline";
+       print ROTCOM "\n\n";
+       print ROTCOM "--Link1--\n";
+       print ROTCOM "%chk=check.chk\n";
+       print ROTCOM "#$level/$basis Geom=check Guess=tcheck SCF=Tight IOP(2/17=4) $grid $opts $pseudo \n\n";
+       print ROTCOM "@set\n\n";
+       print ROTCOM "$charge $multiplicity\n";
+       print ROTCOM "\n";
+       print ROTCOM "$genbasis";
+       print ROTCOM "\n\n";
+       print ROTCOM "--Link1--\n";
+       print ROTCOM "%chk=check.chk\n";
+       print ROTCOM "#$level/$basis Geom=check Guess=tcheck SCF=Tight IOP(2/17=4) $grid Freq(NoRaman) $pseudo \n\n";
+       print ROTCOM "@set\n\n";
+       print ROTCOM "$charge $multiplicity\n";
+       print ROTCOM "\n";
+       print ROTCOM "$genbasis";
+       print ROTCOM "\n\n";
+       close ROTCOM;
+     }
+     $total++;
+   }
+   close LIST;
+
+   print " Total number of conformers $total\n\n";
+
+
+
+
+
+
+
+
+   #----------------------------------------------------------------------
+
+
+   sub DistMatrix {
+       # Print out Distance Matrix and FInd out the fragment of bond between atom1 and atom2
+       my ($n,$A,$B,$rot_i,$atom1,$atom2) = @_;
+       my @A = @$A;
+       my @B = @$B;
+       my ($batom1,$batom2);
+
+       @{$frag_atoms[$rot_i]} = ();
+       @{$frag_atoms_1[$rot_i]} = ();
+
+
+       my @new=();
+       for $i (0..$n-1) {
+           $new[$i]=1;
+       }
+       my @group2=() ;
+       my @group1=() ;
+       my @group=() ;
+       my @group1_element=() ;
+       my @group2_element=() ;
+       my ($g,$gs);
+
+
+       for $i (0..$n-1) {
+           if (connected($i,$atom2-1)) {
+               if ($i != $atom1-1){
+                   if ($print){
+                       print "group2 $A[$i]",$i+1,"\n";
+                   }
+                   push (@group2,$i);
+                   $new[$i]=0;
+               }
+           }
+       }
+       #push (@group,@group2);
+       #print "$atom2 has ",$#group2+1,"\n";
+       for $i (0..$n-1) {
+           if (connected($i,$atom1-1)) {
+               if ($i != $atom2-1){
+                   if ($print){
+                       print "group1 $A[$i]",$i+1,"\n";
+                   }
+                   push (@group1,$i);
+                   $new[$i]=0;
+               }
+           }
+       }
+       
+
+#       print "$atom1 has ",$#group1+1,"\n";
+#           print "atom2, atom1 are $atom2 ,$atom1\n";
+#      if ( ($atom1 eq $tsbond1) or ($atom1 eq $tsbond2) ){
+#          if ( ($atom2 eq $tsbond1) or ($atom2 eq $tsbond2) ){
+#              $#group2 = $#group2;
+#              $#group1 = $#group1;
+#          }
+#          else{
+#              # ts bond so, ngroup -1
+#              $#group1 = $#group1-1;
+#          }
+#      }
+#      elsif ( ($atom2 eq $tsbond1) or ($atom2 eq $tsbond2) ){
+#          if ( ($atom1 eq $tsbond1) or ($atom1 eq $tsbond2) ){
+#              $#group2 = $#group2;
+#              $#group1 = $#group1;
+#          }
+#          else{
+#              $#group2 = $#group2-1;
+#          }
+#      }
+
+#           print "$atom2 has ",$#group2+1,"\n";
+       #print "$atom1 has ",$#group1+1,"\n";
+       $n_group[$rot_i] = max($#group1,$#group2) +1;
+#       print "max is ",$n_group[$rot_i],"\n";
+
+       for $g(0..$#group1){
+           push (@{$group1_element[$g]},$group1[$g]);
+           for $i (0..$n-1) {
+               if (connected($group1[$g],$i)) {
+                   if ($i != $atom1-1 and $i != $atom2-1){
+                       if ($print){
+                           print "group1 $g has $A[$i]",$i+1,"\n";
+                       }
+                       push (@{$group1_element[$g]},$i);
+                       $new[$i]=0;
+                   }
+               }
+           }
+       }
+       for $g(0..$#group2){
+           push (@{$group2_element[$g]},$group2[$g]);
+           for $i (0..$n-1) {
+               if (connected($group2[$g],$i)) {
+                   if ($i != $atom1-1 and $i != $atom2-1){
+                       if ($print){
+                           print "group2 $g has $A[$i]",$i+1,"\n";
+                       }
+                       push (@{$group2_element[$g]},$i);
+                       $new[$i]=0;
+                   }
+               }
+           }
+       }
+       $tot_frag1[$rot_i] = 0;
+       $tot_frag2[$rot_i] = 0;
+       # Recursive 
+       while( $tot_frag1[$rot_i]+ $tot_frag2[$rot_i] <$n){
+       $tot_frag1[$rot_i] = 0;
+       $tot_frag2[$rot_i] = 0;
+           for $i(0..$n-1){
+               if ($i != $atom1-1 && $i != $atom2-1){
+                   for $g(0..$#group1){
+                       for $gs(0..$#{$group1_element[$g]}){
+                           if (connected($i,$group1_element[$g][$gs]) and $new[$i] != 0){
+                               push (@{$group1_element[$g]},$i);
+                               $new[$i] = 0;
+                           }
+                       }
+                   }
+               }
+           }
+           for $i(0..$n-1){
+               if ($i != $atom1-1 && $i != $atom2-1){
+                   for $g(0..$#group2){
+                       for $gs(0..$#{$group2_element[$g]}){
+                           if (connected($i,$group2_element[$g][$gs]) and $new[$i] != 0){
+                               push (@{$group2_element[$g]},$i);
+                               $new[$i] = 0;
+                           }
+                       }
+                   }
+               }
+           }
+
+       for $g(0..$#group1){
+           if ($print){
+               print "Good group1 $g has ";
+           }
+           for $gs(0..$#{$group1_element[$g]}){
+               if ($print){
+                   print $group1_element[$g][$gs]+1,"\t";
+               }
+           }
+           if ($print){
+               print "\n";
+           }
+           $tot_frag1[$rot_i] += $#{$group1_element[$g]}+1;
+       }
+       for $g(0..$#group2){
+           if ($print){
+               print "Good group2 $g has ";
+           }
+           for $gs(0..$#{$group2_element[$g]}){
+               if ($print){
+                   print $group2_element[$g][$gs]+1,"\t";
+               }
+           }
+           if ($print){
+               print "\n";
+           }
+           $tot_frag2[$rot_i] += $#{$group2_element[$g]}+1;
+       }
+       $tot_frag1[$rot_i] = $tot_frag1[$rot_i]+1; # total number of fragments
+       $tot_frag2[$rot_i] = $tot_frag2[$rot_i]+1; # total number of fragments
+       #print "tot_frag1 is $tot_frag1[$rot_i]\n\n\n";
+       #print "tot_frag2 is $tot_frag2[$rot_i]\n\n\n";
+       }
+
+       open RFGFILE, ">$mol.$rot[$rot_i].rfg" or die $!;
+       print RFGFILE "$tot_frag2[$rot_i]\n";
+       push (@{$frag_atoms[$rot_i]},$atom2-1);
+       push (@{$frag_atoms_1[$rot_i]},$atom2);
+       for $g(0..$#group2){
+           for $gs(0..$#{$group2_element[$g]}){
+               push (@{$frag_atoms[$rot_i]},$group2_element[$g][$gs]);
+               push (@{$frag_atoms_1[$rot_i]},$group2_element[$g][$gs]+1);
+           }
+       }
+       print RFGFILE "@{$frag_atoms_1[$rot_i]}\n";
+       close RFGFILE;
+
+
+       return $tot_frag2[$rot_i],@{$frag_atoms[$rot_i]};
+   } 
+
+   sub connected {
+       my ($a,$b) = @_;
+       if (( $B[$a][$b] < Bond($A[$a],$A[$b]) && $B[$a][$b] > 0 ) || ($a+1 == $tsbond1 && $b+1 == $tsbond2) ||($a+1 == $tsbond2 && $b+1 == $tsbond1) || (($a+1 == $hbond1[1]) && ($b+1 == $hbond2[1])) || (($a+1 == $hbond2[1]) && ($b+1 == $hbond1[1])) || (($a+1 == $hbond1[2]) && ($b+1 == $hbond2[2])) || (($a+1 == $hbond2[2]) && ($b+1 == $hbond1[2]))|| (($a+1 == $hbond1[3]) && ($b+1 == $hbond2[3])) || (($a+1 == $hbond2[3]) && ($b+1 == $hbond1[3]))){
+           return 1;
+       }
+       else{
+           return 0;
+       }
+   }
+   sub dot {
+       my ($a,$b,$c) = @_;
+       return ($X[$a]-$X[$b])*($X[$c]-$X[$b])+($Y[$a]-$Y[$b])*($Y[$c]-$Y[$b])+($Z[$a]-$Z[$b])*($Z[$c]-$Z[$b]);
+   }
+
+   sub min {
+       my ($a,$b) = @_;
+       return $b < $a ? $b : $a;
+   }
+   sub max {
+       my ($a,$b) = @_;
+       return $b > $a ? $b : $a;
+   }
+
+
+   sub Bond {
+
+       my ($a1,$a2) = @_;
+
+
+       #CSD covalent radii (Rcov) are used to assign bonded connections in
+       #crystal structures. A bonded connection is established if the distance
+       #(d) between two elements A and B is in the range from Rcov(A) + Rcov(B)
+       #- t to Rcov(A) + Rcov(B) + t, where the tolerance (t) is usually set to
+       #0.4 A. The tolerance and Rcov values can be altered by CSD Editors to
+       #force bonds in certain situations. The Rcov values have been refined
+       #over the years to minimise the need for editorial changes for specific
+       #structures. Elements not yet encountered in the CSD have Rcov = 1.50 A.
+
+  %cov = ( xx => 0.0, h  => 0.23, he => 1.50, li => 0.68, be => 0.35, b  => 0.83,
+           c  => 0.68, n  => 0.68, o  => 0.68, f  => 0.64, ne => 1.50,
+           na => 0.97, mg => 1.10, al => 1.35, si => 1.20, p  => 1.05,
+           s  => 1.02, cl => 0.99, ar => 1.51, k  => 1.33, ca => 0.99,
+           sc => 1.44, ti => 1.47, v  => 1.33, cr => 1.35, mn => 1.35,
+           fe => 1.34, co => 1.33, ni => 1.50, cu => 1.52, zn => 1.45,
+           ga => 1.22, ge => 1.17, as => 1.21, se => 1.22, br => 1.21,
+           kr => 1.50, bi => 1.48, x => 0.00 , i  => 1.40);
+
+       return $cov{lc($a1)}+$cov{lc($a2)} + 0.4 ;
+
+   }
+
+
+   sub ToSymbol {
+       my $n = shift;
+       #my @sym = qw/H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr/;
+
+       return $symbo[$n];
+   }
+   sub atomicN {
+
+       my ($a1) = @_;
+
+
+       my %index ;
+       @index{@symbo} = (0..$#symbo);
+       my $index = $index{lc($a1)} ;
+       return $index;
+   }
+
+   
+   sub Rotate{
+       my ($atom1,$atom2,$theta) = @_;
+       # http://paulbourke.net/geometry/rotate/
+       # Rotate along an arbitray axis, in this case, the bond we selected. theta angle is 120 or 180 depends on how many $group are there on the bond, min(2,3)
+
+       my ($XX1,$YY1,$ZZ1) = ($original[$atom1-1]->[0][0],$original[$atom1-1]->[1][0],$original[$atom1-1]->[2][0]);
+       my ($XX2,$YY2,$ZZ2) = ($original[$atom2-1]->[0][0],$original[$atom2-1]->[1][0],$original[$atom2-1]->[2][0]);
+
+       $T  = new Math::Matrix ([1.0,0.0,0.0,-$XX1 ],
+                               [0.0,1.0,0.0,-$YY1 ],
+                               [0.0,0.0,1.0,-$ZZ1 ],
+                               [0.0,0.0,0.0,1.0   ]);
+       $Ti = new Math::Matrix ([1.0,0.0,0.0, $XX1 ],
+                               [0.0,1.0,0.0, $YY1 ],
+                               [0.0,0.0,1.0, $ZZ1 ],
+                               [0.0,0.0,0.0, 1.0  ]);
+
+
+       $Vlength = sqrt( ($XX1-$XX2)**2+($YY1-$YY2)**2+($ZZ1-$ZZ2)**2 );
+       $Va = ($XX1-$XX2)/$Vlength;
+       $Vb = ($YY1-$YY2)/$Vlength;
+       $Vc = ($ZZ1-$ZZ2)/$Vlength;
+
+       $Vd = sqrt( $Vb**2 + $Vc**2 ); 
+
+       $Rx  = new Math::Matrix ([1.0, 0.0    ,      0.0,0.0 ],
+                                [0.0, $Vc/$Vd, -$Vb/$Vd,0.0 ],
+                                [0.0, $Vb/$Vd,  $Vc/$Vd,0.0 ],
+                                [0.0,     0.0,      0.0,1.0 ]);
+       $Rxi = new Math::Matrix ([1.0,     0.0,      0.0,0.0 ],
+                                [0.0, $Vc/$Vd,  $Vb/$Vd,0.0 ],
+                                [0.0,-$Vb/$Vd,  $Vc/$Vd,0.0 ],
+                                [0.0,     0.0,      0.0,1.0 ]);
+       $Ry  = new Math::Matrix ([$Vd,     0.0,     -$Va,0.0 ],
+                                [0.0,     1.0,      0.0,0.0 ],
+                                [$Va,     0.0,      $Vd,0.0 ],
+                                [0.0,     0.0,      0.0,1.0 ]);
+       $Ryi = new Math::Matrix ([$Vd,     0.0,      $Va,0.0 ],
+                                [0.0,     1.0,      0.0,0.0 ],
+                                [-$Va,    0.0,      $Vd,0.0 ],
+                                [0.0,     0.0,      0.0,1.0 ]);
+       $Rz = new Math::Matrix ([cos($theta),-sin($theta),0.0,0.0 ],
+                               [sin($theta), cos($theta),0.0,0.0 ],
+                               [0.0        ,0.0         ,1.0,0.0 ],
+                               [0.0        ,0.0         ,0.0,1.0 ]);
+
+       #  [x',y',z',1] = Ti * Rxi * Ryi * Rz * Ry * Rx * T * [x,y,z,1]
+       $TRRRRRT = Math::Matrix::multiply(Math::Matrix::multiply(Math::Matrix::multiply(Math::Matrix::multiply(Math::Matrix::multiply(Math::Matrix::multiply($Ti,$Rxi),$Ryi),$Rz),$Ry),$Rx),$T); 
+       #$TRRRRRT->print("TRRRRRT,\n");
+
+   }
+
+   #############################################################################
+   ##                                   promptUser                              #
+   ##############################################################################   
+   #
+   ##----------------------------(  promptUser  )-----------------------------#
+   ##                                                                         #
+   ##  FUNCTION:    promptUser                                                #
+   ##                                                                         #
+   ##  PURPOSE: Prompt the user for some type of input, and return the        #
+   ##       input back to the calling program.                                #
+   ##                                                                         #
+   ##  ARGS:    $promptString - what you want to prompt the user with         #
+   ##       $defaultValue - (optional) a default value for the prompt         #
+   ##                                                                         #
+   ##-------------------------------------------------------------------------#
+   
+   sub promptUser {
+
+       #-------------------------------------------------------------------#
+       #  two possible input arguments - $promptString, and $defaultValue  #
+       #  make the input arguments local variables.                        #
+       #-------------------------------------------------------------------#
+
+       local($promptString,$defaultValue) = @_;
+
+       #-------------------------------------------------------------------#
+       #  if there is a default value, use the first print statement; if   #
+       #  no default is provided, print the second string.                 #
+       #-------------------------------------------------------------------#
+
+       print $promptString, "[", $defaultValue, "]: ";
+
+       $| = 1;               # force a flush after our print
+       $_ = <STDIN>;         # get the input from STDIN (presumably the keyboard)
+
+
+       #------------------------------------------------------------------#
+       # remove the newline character from the end of the input the user  #
+       # gave us.                                                         #
+       #------------------------------------------------------------------#
+
+       chomp;
+
+       #-----------------------------------------------------------------#
+       #  if we had a $default value, and the user gave us input, then   #
+       #  return the input; if we had a default, and they gave us no     #
+       #  no input, return the $defaultValue.                            #
+       #                                                                 # 
+       #  if we did not have a default value, then just return whatever  #
+       #  the user gave us.  if they just hit the <enter> key,           #
+       #  the calling routine will have to deal with that.               #
+       #-----------------------------------------------------------------#
+
+       return $_ ? $_ : $defaultValue;    # return $_ if it has a value
+   }
+
+package Iterator::Array::Jagged;
+
+use strict;
+use warnings 'all';
+our $VERSION = '0.05';
+
+
+#==============================================================================
+sub new
+{
+	my ($class, %args) = @_;
+	
+	my $s = bless {
+		idx => [
+			map { 0 } 0...scalar(@{$args{data}}) - 1
+		],
+		sizes => [
+			map { scalar(@$_) - 1 } @{$args{data}}
+		],
+		data => $args{data},
+		_max => scalar(@{$args{data}}),
+		_is_finished => 0,
+	}, $class;
+	
+	return $s;
+}# end new()
+
+
+#==============================================================================
+sub _increment
+{
+	my ($s, $index) = @_;
+	
+	if( $s->{idx}->[ $index ] < $s->{sizes}->[ $index ] )
+	{
+		$s->{idx}->[ $index ]++;
+	}
+	else
+	{
+		$s->{idx}->[ $index ] = 0;
+		if( $index + 1 < $s->{_max} )
+		{
+			$s->_increment( $index + 1 );
+		}
+		else
+		{
+			$s->{_is_finished} = 1;
+		}# end if()
+	}# end if()
+}# end _increment()
+
+
+#==============================================================================
+sub next
+{
+	my ($s) = @_;
+	
+	return if $s->{_is_finished};
+	
+	# Calculate and return the current value:
+	my @parts = ();
+	for( 0...$s->{_max} - 1 )
+	{
+		my $part_idx = $s->{idx}->[ $_ ];
+		push @parts, $s->{data}->[ $_ ]->[ $part_idx ];
+	}# end for()
+	
+	$s->_increment( 0 );
+	
+	return @parts;
+}# end next()
+
+
+#==============================================================================
+sub permute
+{
+	my ($class, $func, @data) = @_;
+	
+	my @idx = map { 0 } 0...scalar(@data) - 1;
+	my @sizes = map { scalar(@$_) - 1 } @data;
+	my $max = scalar(@data);
+	PERMUTATION: while( 1 )
+	{
+		# Prepare a 'set':
+		my @parts = ();
+		for my $num ( 0...$max - 1 )
+		{
+			push @parts, $data[ $num ]->[ $idx[ $num ] ];
+		}# end for()
+		
+		# Execute 'func':
+		$func->( @parts );
+		
+		# Increment or finish:
+		my $to_increment = 0;
+		INCR: while( 1 )
+		{
+			if( $idx[ $to_increment ] < $sizes[ $to_increment ] )
+			{
+				$idx[ $to_increment ]++;
+				last INCR;
+			}
+			else
+			{
+				$idx[ $to_increment ] = 0;
+				if( $to_increment + 1 < $max )
+				{
+					$to_increment += 1;
+					next INCR;
+				}
+				else
+				{
+					last PERMUTATION;
+				}# end if()
+			}# end if()
+		}# end while()
+		
+		next PERMUTATION;
+	}# end while()
+	
+}# end permute()
+
+
+#==============================================================================
+sub get_iterator
+{
+	my ($class, @data) = @_;
+	
+	my @idx = map { 0 } 0...scalar(@data) - 1;
+	my @sizes = map { scalar(@$_) - 1 } @data;
+	my $max = scalar(@data);
+	my $is_finished = 0;
+	
+	return sub {
+		return if $is_finished;
+		# Prepare a 'set':
+		my @parts = ();
+		for my $num ( 0...$max - 1 )
+		{
+			push @parts, $data[ $num ]->[ $idx[ $num ] ];
+		}# end for()
+		
+		# Increment or finish:
+		my $to_increment = 0;
+		INCR: while( 1 )
+		{
+			if( $idx[ $to_increment ] < $sizes[ $to_increment ] )
+			{
+				$idx[ $to_increment ]++;
+				last INCR;
+			}
+			else
+			{
+				$idx[ $to_increment ] = 0;
+				if( $to_increment + 1 < $max )
+				{
+					$to_increment += 1;
+					next INCR;
+				}
+				else
+				{
+					$is_finished = 1;
+				}# end if()
+			}# end if()
+		}# end while()
+		
+		# Finally return the parts:
+		return @parts;
+	};# end sub{...}
+}# end get_iterator()
+
+1; #return true:
+
+
+=pod
+
+=head1 NAME
+
+Iterator::Array::Jagged - Quickly permute and iterate through multiple jagged arrays.
+
+=head1 SYNOPSIS
+
+	use Iterator::Array::Jagged;
+	
+	# Build up a set of data:
+	my @data = (
+		[qw/ a b /],
+		[qw/ c d /],
+		[qw/ e f g /]
+	);
+	
+	# Iterator in object-oriented mode:
+	my $iterator = Iterator::Array::Jagged->new( data => \@data );
+	while( my @set = $iterator->next )
+	{
+		print "Next set: '" . join("&", @set) . "'\n";
+	}# end while()
+	
+	# Iterator is a subref:
+	my $itersub = Iterator::Array::Jagged->get_iterator( @data );
+	while( my @set = $itersub->() )
+	{
+		print "Next set: '" . join("&", @set) . "'\n";
+	}# end while()
+	
+	# Functional callback style:
+	Iterator::Array::Jagged->permute(sub {
+		my (@set) = @_;
+		print "Next set: '" . join("&", @set) . "'\n";
+	}, @data );
+
+Each example in the code above code prints the following:
+
+	Next set: b&c&e'
+	Next set: a&d&e'
+	Next set: b&d&e'
+	Next set: a&c&f'
+	Next set: b&c&f'
+	Next set: a&d&f'
+	Next set: b&d&f'
+	Next set: a&c&g'
+	Next set: b&c&g'
+	Next set: a&d&g'
+	Next set: b&d&g'
+
+=head1 DESCRIPTION
+
+C<Iterator::Array::Jagged> can permute through sets of "jagged" arrays - arrays of varying lengths.
+
+C<Iterator::Array::Jagged> works much like the odometer in an automobile.  Except that each set
+of "numbers" can have any kind of data you want, and each set can contain 1 or more elements.
+
+C<Iterator::Array::Jagged> is stable and ready for production use as of version C<0.05>.
+
+=head1 METHODS
+
+=head2 new( %args )
+
+Constructor.  C<%args> should included the element C<data> which contains the arrayref of arrayrefs
+that you wish to iterate through.
+
+=head2 next( )
+
+Returns an array representing the next iteration of the permutation of your data set.  See the synopsis for an example.
+
+=head2 get_iterator( @data )
+
+Returns a coderef that, when called, returns the next set of data until there are no more permutations.  See the synopsis for an example.
+
+=head2 permute( $subref, @data )
+
+Calls C<$subref> for each permutation in C<@data>.  This is currently B<BY FAR THE FASTEST METHOD AVAILABLE>.
+
+=head1 BENCHMARKS
+
+After the initial release of Iterator::Array::Jagged, some people were wondering if there was any benefit to using
+I::A::J over another older module L<Algorithm::Loops> and its C<NestedLoops> method.  So I did some benchmarking and found
+some mixed results.
+
+                    Rate I::A::J OO A::L::NL func I::A::J iterator A::L::NL iterator I::A::J permute
+  I::A::J OO        4.19/s         --           -3%             -19%              -29%            -45%
+  A::L::NL func     4.32/s         3%            --             -16%              -27%            -43%
+  I::A::J iterator  5.15/s        23%           19%               --              -12%            -32%
+  A::L::NL iterator 5.88/s        40%           36%              14%                --            -22%
+  I::A::J permute   7.58/s        81%           75%              47%               29%              --
+
+Depending on the size and depth of the jagged array data passed in, the results vary slightly.  However, the order
+in which each method finishes is the same.  Iterator::Array::Jagged->permute is fastest by a signifigant margin over
+C<Algorithm::Loops::NestedLoops>.  On the opposite end of the spectrum we have the OO method of Iterator::Array::Jagged
+which comes in at nearly half the speed of the C<permute> option.
+
+The benchmark script that was used is shown in the next section.
+
+Benchmarks were done on a server with the following specs:
+
+=over 4
+
+=item CPU:
+
+Intel(R) Core(TM)2 CPU 6400 @ 2.13GHz stepping 02
+
+=item RAM:
+
+2Gb
+
+=back
+
+=head2 The Benchmark Script
+
+  #!/usr/bin/perl -w
+  
+  use strict;
+  use Time::HiRes qw(gettimeofday);
+  use Benchmark qw' :all ';
+  
+  use Algorithm::Loops 'NestedLoops';
+  use Iterator::Array::Jagged;
+  
+  
+  my @data = ();
+  for my $var ( 1...4 )
+  {
+    my @set = ();
+    my $max = $var % 2 ? 10 : 11;
+    for my $val ( 1...$max )
+    {
+      push @set, "var$var=val$val";
+    }# end for()
+    push @data, \@set;
+  }# end for()
+  
+  cmpthese( 20, {
+    'I::A::J OO'        => sub { do_iterator_array_jagged( @data ) },
+    'A::L::NL iterator' => sub { do_nestedloops_iterator( @data ) },
+    'A::L::NL func'     => sub { do_nestedloops_func( @data ) },
+    'I::A::J permute'   => sub { do_iaj_permute( @data ) },
+    'I::A::J iterator'  => sub { do_iaj_iterator( @data ) },
+  });
+  
+  
+  sub do_iaj_iterator
+  {
+    my $iter = Iterator::Array::Jagged->get_iterator( @_ );
+    while( my @set = $iter->() )
+    {
+    }# end while()
+  }# end do_iaj_iterator()
+  
+  
+  sub do_iaj_permute
+  {
+    Iterator::Array::Jagged->permute( sub { }, @_ );
+  }# end do_iaj_permute()
+  
+  
+  sub do_iterator_array_jagged
+  {
+    my @data = @_;
+    my $iter = Iterator::Array::Jagged->new( data => \@data );
+    while( my $set = $iter->next )
+    {
+    }# end while()
+  }# end do_iterator_array_jagged()
+  
+  
+  sub do_nestedloops_func
+  {
+    NestedLoops( \@_, sub { } );
+  }# end do_nestedloops_func()
+  
+  
+  sub do_nestedloops_iterator
+  {
+    my @data = @_;
+    my $iter = NestedLoops( \@data );
+    while( my @set = $iter->() )
+    {
+    }# end while()
+  }# end do_nestedloops()
+
+=head1 BUGS
+
+It's possible that some bugs have found their way into this release.
+
+Use RT L<http://rt.cpan.org/NoAuth/Bugs.html?Dist=Iterator-Array-Jagged> to submit bug reports.
+
+=head1 AUTHOR
+
+John Drago L<mailto:jdrago_999@yahoo.com>
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright 2007 John Drago, All rights reserved.
+
+This software is free software.  It may be used and distributed under the
+same terms as Perl itself.
+
+=cut
+
+#                              -*- Mode: Perl -*- 
+# Matrix.pm -- 
+# ITIID           : $ITI$ $Header $__Header$
+# Author          : Ulrich Pfeifer
+# Created On      : Tue Oct 24 18:34:08 1995
+# Last Modified By: Ulrich Pfeifer
+# Last Modified On: Sun Nov 16 10:52:30 2003
+# Language        : Perl
+# Update Count    : 202
+# Status          : Unknown, Use with caution!
+#
+# Copyright (C) 2002, Bill Denney <gte273i@prism.gatech.edu>, all rights reserved.
+# Copyright (C) 2001, Brian J. Watson <bjbrew@power.net>, all rights reserved.
+# Copyright (C) 2001, Ulrich Pfeifer <pfeifer@wait.de>, all rights reserved.
+# Copyright (C) 1995, Universität Dortmund, all rights reserved.
+# Copyright (C)  2001, Matthew Brett <matthew.brett@mrc-cbu.cam.ac.uk>
+#
+# Permission to use this software is granted under the same
+# restrictions as for Perl itself.
+#
+# Revision 0.5  2002/06/02 15:47:40
+# Bill Denney added pinvert function
+#
+# Revision 0.3  2001/04/17 11:10:15
+# Extensions from Brian Watson
+#
+# Revision 0.2  1996/07/10 17:48:14  pfeifer
+# Fixes from Mike Beachy <beachy@chem.columbia.edu>
+#
+# Revision 0.1  1995/10/25  09:48:39  pfeifer
+# Initial revision
+#
+
+=head1 NAME
+
+Math::Matrix - Multiply and invert Matrices
+
+=head1 SYNOPSIS
+
+use Math::Matrix;
+
+=head1 DESCRIPTION
+
+The following methods are available:
+
+=head2 new
+
+Constructor arguments are a list of references to arrays of the same
+length.  The arrays are copied. The method returns B<undef> in case of
+error.
+
+        $a = new Math::Matrix ([rand,rand,rand],
+                               [rand,rand,rand],
+                               [rand,rand,rand]);
+
+If you call  C<new> as method, a zero filled matrix with identical deminsions is returned.
+
+=head2 clone
+
+You can clone a matrix by calling:
+
+        $b = $a->clone;
+
+=head2 size
+
+You can determine the dimensions of a matrix by calling:
+
+        ($m, $n) = $a->size;
+
+=head2 concat
+
+Concatenates two matrices of same row count. The result is a new
+matrix or B<undef> in case of error.
+
+        $b = new Math::Matrix ([rand],[rand],[rand]);
+        $c = $a->concat($b);
+
+=head2 transpose
+
+Returns the transposed matrix. This is the matrix where colums and
+rows of the argument matrix are swaped.
+
+=head2 multiply
+
+Multiplies two matrices where the length of the rows in the first
+matrix is the same as the length of the columns in the second
+matrix. Returns the product or B<undef> in case of error.
+
+=head2 solve
+
+Solves a equation system given by the matrix. The number of colums
+must be greater than the number of rows. If variables are dependent
+from each other, the second and all further of the dependent
+coefficients are 0. This means the method can handle such systems. The
+method returns a matrix containing the solutions in its columns or
+B<undef> in case of error.
+
+=head2 invert
+
+Invert a Matrix using C<solve>.
+
+=head2 multiply_scalar
+
+Multiplies a matrix and a scalar resulting in a matrix of the same
+dimensions with each element scaled with the scalar.
+
+  $a->multiply_scalar(2);  scale matrix by factor 2
+
+=head2 add
+
+Add two matrices of the same dimensions.
+
+=head2 substract
+
+Shorthand for C<add($other-E<gt>negative)>
+
+=head2 equal
+
+Decide if two matrices are equal.  The criterion is, that each pair
+of elements differs less than $Math::Matrix::eps.
+
+=head2 slice
+
+Extract columns:
+
+  a->slice(1,3,5);
+
+=head2 determinant
+
+Compute the determinant of a matrix.
+
+=head2 dot_product
+
+Compute the dot product of two vectors.
+
+=head2 absolute
+
+Compute the absolute value of a vector.
+
+=head2 normalizing
+
+Normalize a vector.
+
+=head2 cross_product
+
+Compute the cross-product of vectors.
+
+=head2 print
+
+Prints the matrix on STDOUT. If the method has additional parameters,
+these are printed before the matrix is printed.
+
+=head2 pinvert
+
+Compute the pseudo-inverse of the matrix: ((A'A)^-1)A'
+
+=head1 EXAMPLE
+
+        use Math::Matrix;
+
+        srand(time);
+        $a = new Math::Matrix ([rand,rand,rand], 
+                         [rand,rand,rand], 
+                         [rand,rand,rand]);
+        $x = new Math::Matrix ([rand,rand,rand]);
+        $a->print("A\n");
+        $E = $a->concat($x->transpose);
+        $E->print("Equation system\n");
+        $s = $E->solve;
+        $s->print("Solutions s\n");
+        $a->multiply($s)->print("A*s\n");
+
+=head1 AUTHOR
+
+Ulrich Pfeifer E<lt>F<pfeifer@ls6.informatik.uni-dortmund.de>E<gt>
+
+Brian J. Watson E<lt>F<bjbrew@power.net>E<gt>
+
+Matthew Brett E<lt>matthew.brett@mrc-cbu.cam.ac.ukE<gt>
+
+=cut
+
+package Math::Matrix;
+use vars qw($VERSION $eps);
+use strict;
+
+$VERSION = 0.5;
+
+use overload
+       '~'  => 'transpose',
+       '+'  => 'add',
+       '-'  => 'subtract',
+       '*'  => 'multiply',
+       '""' => 'as_string';
+
+sub version {
+    return "Math::Matrix $VERSION";
+}
+
+# Implement - array copy, inheritance 
+
+# class call - new matrix as input
+# object call - creates matrix with same dimensions matrix
+
+sub new {
+    my $that = shift;
+    my $class = ref($that) || $that;
+    my $self = [];
+    if (ref($that) && (@_ == 0)) { # object call no args -> copy matrix
+	for (@$that) {
+	    push(@{$self}, [map {0} @{$_}]);
+	}
+    } else { # class call / object call -> matrix as input
+	my $len = scalar(@{$_[0]});
+	for (@_) {
+	    return undef if scalar(@{$_}) != $len;
+	    push(@{$self}, [@{$_}]);
+	}
+    }
+    bless $self, $class;
+}
+
+sub clone {
+    my $that = shift;
+    my $self = [];
+
+    for (@$that) {
+        push(@{$self}, [@{$_}]);
+    }
+    bless $self, ref($that)||$that;
+}
+
+sub size {
+    my $self = shift;
+    my $m = @{$self};
+    my $n = @{$self->[0]};
+    ($m, $n);
+}
+
+sub concat {
+    my $self   = shift;
+    my $other  = shift;
+    my $result =  $self->clone();
+
+    return undef if scalar(@{$self}) != scalar(@{$other});
+    for my $i (0 .. $#{$self}) {	
+	push @{$result->[$i]}, @{$other->[$i]};
+    }
+    $result;
+}
+
+sub transpose {
+    my $self = shift;
+    my $class = ref($self);
+    my @result;
+    my $m;
+
+    for my $col (@{$self->[0]}) {
+        push @result, [];
+    }
+    for my $row (@{$self}) {
+        $m=0;
+        for my $col (@{$row}) {
+            push(@{$result[$m++]}, $col);
+        }
+    }
+    $class->new(@result);
+}
+
+sub vekpro {
+    my($a, $b) = @_;
+    my $result=0;
+
+    for my $i (0 .. $#{$a}) {
+        $result += $a->[$i] * $b->[$i];
+    }
+    $result;
+}
+
+sub multiply {
+    my $self  = shift;
+    my $class = ref($self);
+    my $other = shift->transpose;
+    my @result;
+    my $m;
+
+    return undef if $#{$self->[0]} != $#{$other->[0]};
+    for my $row (@{$self}) {
+        my $rescol = [];
+	for my $col (@{$other}) {
+            push(@{$rescol}, vekpro($row,$col));
+        }
+        push(@result, $rescol);
+    }
+    $class->new(@result);
+}
+
+$eps = 0.00001;
+
+sub solve {
+    my $self  = shift;
+    my $class = ref($self);
+
+    my $m    = $self->clone();
+    my $mr   = $#{$m};
+    my $mc   = $#{$m->[0]};
+    my $f;
+    my $try;
+
+    return undef if $mc <= $mr;
+    ROW: for(my $i = 0; $i <= $mr; $i++) {
+	$try=$i;
+	# make diagonal element nonzero if possible
+	while (abs($m->[$i]->[$i]) < $eps) {
+	    last ROW if $try++ > $mr;
+	    my $row = splice(@{$m},$i,1);
+	    push(@{$m}, $row);
+	}
+
+	# normalize row
+	$f = $m->[$i]->[$i];
+	for(my $k = 0; $k <= $mc; $k++) {
+            $m->[$i]->[$k] /= $f;
+	}
+	# subtract multiple of designated row from other rows
+        for(my $j = 0; $j <= $mr; $j++) {
+	    next if $i == $j;
+            $f = $m->[$j]->[$i];
+            for(my $k = 0; $k <= $mc; $k++) {
+                $m->[$j]->[$k] -= $m->[$i]->[$k] * $f;
+            }
+        }
+    }
+# Answer is in augmented column
+    transpose $class->new(@{$m->transpose}[$mr+1 .. $mc]);
+}
+
+sub pinvert {
+    my $self  = shift;
+    my $class = ref($self);
+
+    my $m    = $self->clone();
+
+    $m->transpose->multiply($m)->invert->multiply($m->transpose);
+}    
+
+sub print {
+    my $self = shift;
+
+    print @_ if scalar(@_);
+    print $self->as_string;
+}
+
+sub as_string {
+    my $self = shift;
+    my $out = "";
+    for my $row (@{$self}) {
+        for my $col (@{$row}) {
+            $out = $out . sprintf "%10.5f ", $col;
+        }
+        $out = $out . sprintf "\n";
+    }
+    $out;
+}
+
+sub new_identity {
+  my $type = shift;
+  my $class = ref($type) || $type;
+  my $self = [];
+  my $size = shift;
+
+  for my $i (1..$size) {
+    my $row = [];
+    for my $j (1..$size) {
+      push @$row, $i==$j ? 1 : 0;
+    }
+    push @$self, $row;
+  }
+  bless $self, $class;
+}
+
+sub eye {
+    &new_identity(@_);
+}
+
+sub multiply_scalar {
+  my $self = shift;
+  my $factor = shift;
+  my $result = $self->new();
+
+  my $last = $#{$self->[0]};
+  for my $i (0 .. $#{$self}) {
+    for my $j (0 .. $last) {
+      $result->[$i][$j] = $factor * $self->[$i][$j];
+    }
+  }
+  $result;
+}
+
+sub negative {
+  shift->multiply_scalar(-1);
+}
+
+sub subtract {
+    my $self = shift;
+    my $other = shift;
+    $self->add($other->negative);
+}
+
+sub equal {
+  my $A = shift;
+  my $B = shift;
+  my $ok = 1;
+
+  my $last = $#{$A->[0]};
+  for my $i (0 .. $#{$A}) {
+    for my $j (0 .. $last) {
+      abs($A->[$i][$j]-$B->[$i][$j])<$eps or $ok=0;
+    }
+  }
+  $ok;
+}
+
+sub add {
+  my $self = shift;
+  my $other = shift;
+  my $result = $self->new();
+
+  return undef
+    if $#{$self} != $#{$other};
+
+  my $last= $#{$self->[0]};
+  return undef
+    if $last != $#{$other->[0]};
+  for my $i (0 .. $#{$self}) {
+    for my $j (0 .. $last) {
+      $result->[$i][$j] = $self->[$i][$j] + $other->[$i][$j];
+    }
+  }
+  $result;
+}
+
+sub slice {
+  my $self = shift;
+  my $class = ref($self);
+  my $result = $class->new([]);
+
+  foreach my $j (@_) {
+    for my $i (0..$#{$self}) {
+      push @{$result->[$i]}, $self->[$i][$j];
+    }
+  }
+  $result;
+}
+
+sub determinant {
+  my $self = shift;
+  my $class = ref($self);
+  my $last= $#{$self->[0]};
+
+  return undef
+    unless $last == $#{$self};
+
+  if ($last == 0) {
+    return $self->[0][0];
+  } else {
+    my $result = 0;
+    foreach my $col (0..$last) {
+      my $matrix = $self->slice(0..$col-1,$col+1..$last);
+      $matrix = $class->new(@$matrix[1..$last]);
+      my $term += $matrix->determinant();
+      $term *= $self->[0][$col];
+      $term *= $col % 2 ? -1 : 1;
+      $result += $term;
+    }
+    return $result;
+  }
+}
+
+#
+# For vectors only
+#
+
+sub dot_product {
+  my $vector1 = shift;
+  my $vector2 = shift;
+
+  $vector1 = $vector1->transpose()
+    unless @$vector1 == 1;
+  return undef
+    unless @$vector1 == 1;
+
+  $vector2 = $vector2->transpose()
+    unless @{$vector2->[0]} == 1;
+  return undef
+    unless @{$vector2->[0]} == 1;
+
+  return $vector1->multiply($vector2)->[0][0];
+}
+
+sub absolute {
+  my $vector = shift;
+  sqrt $vector->dot_product($vector);
+}
+
+sub normalize {
+  my $vector = shift;
+  my $length = $vector->absolute();
+  return undef
+    unless $length;
+  $vector->multiply_scalar(1 / $length);
+}
+
+sub cross_product {
+  my $vectors = shift;
+  my $class = ref($vectors);
+
+  my $dimensions = @{$vectors->[0]};
+  return undef
+    unless $dimensions == @$vectors + 1;
+
+  my @axis;
+  foreach my $column (0..$dimensions-1) {
+    my $tmp = $vectors->slice(0..$column-1,
+                              $column+1..$dimensions-1);
+    my $scalar = $tmp->determinant;
+    $scalar *= ($column % 2) ? -1 : 1;
+    push @axis, $scalar;
+  }
+  my $axis = $class->new(\@axis);
+  $axis = $axis->multiply_scalar(($dimensions % 2) ? 1 : -1);
+}
+
+sub invert {
+  my $M = shift;
+  my ($m, $n) = $M->size;
+  my (@I);
+  die "Matrix dimensions are $m X $n. -- Matrix not invertible.\n"
+    if $m != $n;
+  my $I = $M->new_identity($n);
+  ($M->concat($I))->solve;
+}
+
+1;
+__END__

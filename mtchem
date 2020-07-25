@@ -1,0 +1,57 @@
+#! /usr/bin/perl 
+
+   
+`ls *log > list`;
+if ($ARGV[0]) { $T = $ARGV[0] }
+else { $T = 298.15 }
+if ($ARGV[1]) { $cutoff = $ARGV[1] }
+else { $cutoff = 0 }
+
+print "For every log file in the directory: runs tchem-qho and calculates G at $T K with a $cutoff cm-1 QHO cutoff based on the last energy in the file.\n";
+
+if ($ARGV[1] == 0) { $cutoff = "" }
+
+open list, "list" or die $!;
+    while ($files = <list>) {
+        foreach $i ($files){
+            chomp($i);
+            $i =~ s/.log//; 
+            @line = split(/\s+/,`grep Done $i.log | tail -n 1 `);
+            $E[$count]=$line[5];
+            open datfile, ">>$i.$T.dat" or die $!;
+            open logfile, "$i.log" or die $!;
+            local $/;
+            open(LOG, "$i.log") || die "Can't open $i.log for reading.\n";
+            undef $/;
+            @log = split(/ifsldjfalj/,<LOG>,-1);
+            close(LOG)|| die "Can't close $i.log.\n";
+            if ($log[0] =~ /Freq/) { 
+                $zpve = 0;
+                $tc = 0;
+                $entropy = 0;
+                $TS = 0;
+#               system("tchem-qho $i.log $T $cutoff");
+                `tchem-qho $i.log $T $cutoff`;
+                @line = split(/\s+/,`grep Stotal $i.$T.dat`);
+                $entropy = $line[5];
+                $TS = $entropy*298.15/627.51/4.184/1000;
+                @line = split(/\s+/,`grep "TC Harm" $i.$T.dat`);
+                $tc = $line[5];
+                $tc = $tc/627.51/4.184;
+                @line = split(/\s+/,`grep "ZPVE in" $i.$T.dat`);
+                $zpve = $line[5];
+                $zpve = $zpve/627.51/4.184;
+                $H[$count] = $E[$count] + $zpve + $tc;
+                $G[$count] = $H[$count] - $TS;
+                print datfile "\n DFT Energy      ZPVE          TC        Entropy         TS           H           G      \n";
+                printf datfile "%12.6f %12.6f %12.6f %12.6f %12.6f %12.6f %12.6f data\n", $E[$count], $zpve, $tc, $entropy, $TS, $H[$count], $G[$count];
+            }
+            else { 
+                $G[$count] = 1000.0;
+            }
+            printf datfile "\nGfinal %12.6f\n", $G[$count];
+            close (datfile);
+            $eng[$count] = $G[$count];
+        }
+    }
+

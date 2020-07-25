@@ -1,0 +1,41 @@
+#!/usr/bin/perl
+
+if (@ARGV < 1) { die "Syntax: getE fileset calctype etype [list]\nThis program allows you to pull all energies of a certain type out of a set of Gaussian files.\n   fileset is anything which identifies which files you are after - use ~ instead of * eg. mol~log will give results for mol1.log mol2.log...\n   calctype is anything which will identify which calculation from the files you are interested in\n   etype is the type of energy you are after (HF, MP2, etc.)\nIf you already have the files you are interested in listed in a file, give this filename for \"fileset\" and include \"list\" at the end.\nEg. if you have a set of files, each of which includes:\n   M052X/6-31G* 6D Opt\n   MP2/6-31G* 6D single point\n   MP2/GTMP2Large 5D single point\nthen:\n   \"getE log M05 HF\" will pull out the M052X energies\n   \"getE log 6D MP2\" will pull out the MP2/6-31G* energies\n   \"getE log 5D HF\" will pull out the HF energies from the MP2/GTMP2Large calculation\n" }
+
+$files = $ARGV[0];
+$calctype = $ARGV[1];
+$etype = $ARGV[2];
+
+if ($ARGV[3]) {
+     $listfile = $files;
+     }
+else {
+     @FS = split(/\~/,$files);
+     $listfile = "getE.list";
+     `ls *$FS[0]*$FS[1]*$FS[2]*$FS[3]* > $listfile`;
+     }
+
+open (LST, "<$listfile") || die "couldn't open $listfile for reading\n";
+while (<LST>) {
+     chomp;
+     $filename = $_;
+     local $/;
+     open (FILE, "<$filename") || die "couldn't open $filename for reading\n";
+     undef $/;
+     @file = split(/\n\n+/,<FILE>,-1);
+     close (FILE);
+     for ($i = 0; $i <= $#file; $i++) {
+         if ($file[$i] =~ /GINC/) {
+             $file[$i] =~ s/\n //g;
+             $file[$i] =~ s/\\/ /g;
+             if (($file[$i] =~ /$calctype/) && ($file[$i] =~ /$etype=(\S+)/)) {
+                 printf "%-60s    %-10s %-10s", $filename, $calctype, $etype;
+                 printf " %15.7f\n", $1;
+                 }
+             }
+         }
+     }
+
+close (LST);
+
+

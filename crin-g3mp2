@@ -1,0 +1,26 @@
+#!/usr/bin/perl
+
+if (@ARGV < 1) { die "Syntax: crin-g3mp2 logfile\n" }
+
+$file = $ARGV[0];
+$rt = $file;
+$rt =~ s/\.ar//g;
+$rt =~ s/\.log//g;
+$rt2 = $rt;
+$rt =~ s/\.2dfp//g;
+$rt =~ s/\.M062X//g;
+$ct[0] = "freq";
+$ct[1] = "g3mp2rad";
+$ct[2] = "ccsdt";
+
+for ($i = 0; $i <= 2; $i++) {
+     `crin2 $ct[$i] $file`;
+     }
+
+`mv $rt2.ccsdt.ini $rt.ccsdt.ini`;
+`mv $rt2.g3mp2rad.com $rt.g3.com`;
+`mv $rt2.freq.com $rt.freq.com`;
+#system("rjsub $rt.ccsdt.ini -e");
+#system("rjsub $rt.g3.com -e");
+#system("rjsub $rt.freq.com");
+

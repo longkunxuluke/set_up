@@ -1,0 +1,25 @@
+#!/usr/bin/perl
+
+if (@ARGV < 2) { die "Syntax: rename matchpattern subpattern [-c]\n         -c option makes a copy of the original file rather than renaming.\n" }
+
+$mp = $ARGV[0];
+$sp = $ARGV[1];
+$cp = $ARGV[2];
+
+$listfile = "list";
+`ls *$mp* > $listfile`;
+
+open (LST, "<$listfile") || die "couldn't open $listfile for reading\n";
+while (<LST>) {
+     chomp;
+     $file = $_;
+     s/$mp/$sp/g;
+     $newfile = $_;
+#    print "$file $newfile \n";
+     if ($cp =~ "-c") {
+         `cp $file $newfile`;
+     }
+     else {
+         `mv $file $newfile`;
+     }
+}

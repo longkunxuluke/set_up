@@ -1,0 +1,34 @@
+#!/usr/bin/perl -w
+
+    @symbo=("H" ,                                                                                "He",
+        "Li","Be",                                                   "B", "C", "N", "O", "F","Ne",
+        "Na","Mg",                                                  "Al","Si", "P", "S","Cl","Ar",
+        "K" ,"Ca","Sc","Ti", "V","Cr","Mn","Fe","Co","Ni","Cu","Zn","Ga","Ge","As","Se","Br","Kr",
+        "Rb","Sr", "Y","Zr","Nb","Mo","Tc","Ru","Rh","Pd","Ag","Cd","In","Sn","Sb","Te", "I","Xe",
+        "Cs","Ba",
+        "La","Ce","Pr","Nd","Pm","Sm","Eu","Gd","Tb","Dy","Ho","Er","Tm","Yb","Lu",
+        "Hf","Ta", "W","Re","Os","Ir","Pt","Au","Hg","Tl","Pb","Bi","Po","At","Rn",
+        "Fr","Ra",
+        "Ac","Th","Pa", "U","Np","Pu","Am","Cm","Bk","Cf","Es","Fm","Md","No","Lr");
+
+    $in = $ARGV[0];
+    $out = $in.".xyz";
+    open(LOG, $in) || die "Can't open $in for reading.\n";
+    open(OUT, ">$out") || die "Can't open $out for writing.\n";
+    while (<LOG>){
+        $line = $_;
+        if ($line =~ /^\s+$/) { last }
+        push @last_geometry, $line;
+    }
+    close LOG;
+    for ($i = 0 ;$i <= $#last_geometry ; $i++){
+        @crap= split(/\s+/,$last_geometry[$i]);
+        $atom[$i] = $crap[2];
+        $x[$i] = $crap[4];
+        $y[$i] = $crap[5];
+        $z[$i] = $crap[6];
+        push @stripped_geometry, "$symbo[$atom[$i]-1]\t$x[$i]\t$y[$i]\t$z[$i]";
+    }
+    $stripped_geometry = join("\n",@stripped_geometry);
+    print OUT "$stripped_geometry\n"; 
+

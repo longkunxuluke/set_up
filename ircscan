@@ -1,0 +1,84 @@
+#! /usr/bin/perl 
+
+@symbo=("","H","He",
+        "Li","Be",                                                   "B", "C", "N", "O", "F","Ne",
+        "Na","Mg",                                                  "Al","Si", "P", "S","Cl","Ar",
+        "K","Ca","Sc","Ti", "V","Cr","Mn","Fe","Co","Ni","Cu","Zn","Ga","Ge","As","Se","Br","Kr",
+        "Rb","Sr", "Y","Zr","Nb","Mo","Tc","Ru","Rh","Pd","Ag","Cd","In","Sn","Sb","Te", "I","Xe",
+        "Cs","Ba",
+        "La","Ce","Pr","Nd","Pm","Sm","Eu","Gd","Tb","Dy","Ho","Er","Tm","Yb","Lu",
+        "Hf","Ta", "W","Re","Os","Ir","Pt","Au","Hg","Tl","Pb","Bi","Po","At","Rn",
+        "Fr","Ra",
+        "Ac","Th","Pa", "U","Np","Pu","Am","Cm","Bk","Cf","Es","Fm","Md","No","Lr");
+
+$filename = $ARGV[0];
+chomp($filename);
+$filename =~ s/.log//;
+$input =file2string($ARGV[0]);
+$step=0;
+@cm = split(/Charge/,$input);
+@cm = split(/\s+/,$cm[1]);
+if ($input =~/irc/i){
+    print "this is an irc job\n";
+    $job="irc";
+}
+elsif ($input =~/scan/i){
+    @crap3 =split(/Scan/,$input);
+    @startpoint =split(/\s+/,$crap3[0]);
+    @stepsize =split(/\s+/,$crap3[1]);
+    print "this is a scan job\n";
+    $job="scan";
+}
+
+    
+
+@crap = split(/Optimization /,$input);
+open engfile, ">$filename.eng" or die $!;
+
+for ($i=0;$i< $#crap;$i++){
+    @crap1 = split(/Z-Matrix orientation:/,$crap[$i]);
+    @geom = split(/Distance matrix/,$crap1[$#crap1]);
+    @crap2 = split(/SCF Done:/,$crap[$i]);
+    @eng = split(/\s+/,$crap2[$#crap2]);
+    if($job eq "irc"){
+        print engfile $step+1,"\t$eng[3]\n";
+    }
+    elsif($job eq "scan"){
+        print engfile $step+1,"\t", $startpoint[$#startpoint]+$stepsize[2]*$i, "\t$eng[3]\n";
+    }
+    $optgeom[$step] = $geom[0];
+    $step++;
+}
+close engfile ;
+
+print "There are $step steps in $filename.log\n";
+
+for ($i=0;$i<$step;$i++){
+    $a = $i+1;
+    open geomfile, ">$filename.$a.gin" or die $!;
+    print geomfile "$cm[2]\t$cm[5]\n";
+    @xyz=split(/\n/,$optgeom[$i]);
+    for ($j=5;$j<$#xyz-1;$j++){
+        @orient = split(/\s+/,$xyz[$j]);
+        $A[$j] = $orient[2];
+        $X[$j] = $orient[4];
+        $Y[$j] = $orient[5];
+        $Z[$j] = $orient[6];
+        print geomfile "$symbo[$A[$j]]\t$X[$j]\t$Y[$j]\t$Z[$j]\n";
+    }
+    print geomfile "\n";
+    close geomfile;
+}
+
+sub file2string {
+    # file2string("filename") : gets a txt file, turns it into a string.
+    local $/;
+
+    open(INPUTFILE, $_[0]) ||die "Can't open $_[0] for reading.\n";
+    undef $/;
+    $file = <INPUTFILE>;
+    close(INPUTFILE)|| die "Can't close $_[0].\n";
+    return $file;
+}
+
+__END__

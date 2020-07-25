@@ -1,0 +1,22 @@
+#! /usr/bin/perl 
+
+
+open ifh, "$ARGV[0]" or die $!;
+while (<ifh>) {
+    if (/SCF Done/) {
+        @crap=split(/\s+/,$_);
+        $eng=$crap[5];
+    }
+    if (/Normal/){
+        $result="Optimised";
+    }
+    if (/Number of steps exceeded/){
+        $result1=" :Number of steps exceeded";
+    }
+    if (/Address Error/){
+        $result="Not Optimised";
+    }
+}
+printf "%-40s %20.10f %15s %30s\n",$ARGV[0],$eng, $result, $result1;
+
+

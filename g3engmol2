@@ -1,0 +1,245 @@
+#! /usr/bin/perl 
+
+# USAGE G3eng $list $temp  # $list contain lines of $mol
+# In directory, we need $mol.g3.log $mol.log
+$mol = $ARGV[0];
+$temp = $ARGV[1];
+$cutoff = $ARGV[2];
+$logcheck = 0;
+
+        chomp($mol);
+        chomp($temp);
+
+        $so=0.0;
+
+        if (-e "$mol.log"){
+            open ifh, "$mol.log" or die $!;
+            while (<ifh>) {
+                if (/Stoichiometry\s+H\(2\)\s+/){
+                    $so = 0.000000; 
+                    $logcheck = 1;
+                }
+                elsif (/Stoichiometry\s+F\(2\)\s+/){
+                    $so = -0.00061; 
+                    $logcheck = 1;
+                }
+                elsif (/Stoichiometry\s+Cl\(2\)\s+/){
+                    $so = -0.00134;
+                    $logcheck = 1;
+                }
+                elsif (/Stoichiometry\s+Br\(2\)\s+/){
+                    $so = -0.00560;
+                    $logcheck = 1;
+                }
+                elsif (/Stoichiometry\s+I\(2\)\s+/){
+                    $so = -0.01149;
+                    $logcheck = 1;
+                }
+                if (/Frequencies/) {
+                    $logcheck = 1;
+                }
+            }
+            close ifh;
+
+#           if ( (!-f "$mol.$temp.dat" or -s "$mol.$temp.dat" == 0) and $logcheck == 1) {
+                `tchem-qho $mol $temp $cutoff`;
+#           }
+#           else{
+#               `touch $mol.$temp.dat`;
+#           }
+        }
+        else{
+            `touch $mol.log`;
+            `touch $mol.$temp.dat`;
+        }
+
+
+        
+
+
+        geteng($mol);
+        getdat($mol);
+
+        $b3H   = $b3lype + $zpve + $tc ;
+        if ($mp2[0] ne "" and $mp2[1] ne "" and $ccsdte ne "" and $zpve ne ""){
+            $Eraw = -$mp2[0] + $mp2[1] + $ccsdte - $romp2 + $hlc + $so;
+        }
+        if ($rohfe ne "" and $rhfe ne ""){
+            $hfe = $rohfe - $rhfe;
+        }
+        if ($urccsdte ne "" and $uccsdte ne ""){
+            $UvsUR = $urccsdte - $uccsdte;
+        }
+        `echo $mol,$entropy,$tc,$zpve,$hlc,$so,$b3lype,$romp2,$mp2[0],$mp2[1],$urccsdte,$T1m,$uccsdte,$T1g,$UvsUR,$rohfe,$rhfe,$hfe,$TS,$Eraw > $mol.G3`;
+
+sub getdat{
+    open ifh, "$mol.$temp.dat" or die "$mol.$temp.dat not here";
+    while (<ifh>) {
+        if (/HLC/) {
+            @crap=split(/\s+/,$_);
+            $hlc = $crap[3];
+        }
+        if (/Stotal Harmonic oscillator/) {
+            @crap=split(/\s+/,$_);
+            $entropy = $crap[5]; # J/mol K
+            $TS = $entropy * $temp /2625.5/1000.0;
+            print "$entropy $temp $TS\n";
+        }
+        if (/TC Harmonic oscillator/) {
+            @crap=split(/\s+/,$_);
+            $tc = $crap[5]; # kJ/mol
+            $tc = $tc /2625.5;
+        }
+        if (/ZPVE in /) {
+            @crap=split(/\s+/,$_);
+            $zpve = $crap[5]; #kJ/mol
+            $zpve = $zpve /2625.5;
+        }
+    }
+}
+
+
+sub geteng{
+
+    if (-e "$mol.log"){
+        open ifh, "$mol.log" or die $!;
+        while (<ifh>) {
+            if (/SCF Done:  /) {
+                @crap=split(/\s+/,$_);
+                $b3lype = $crap[5] ; 
+            }
+        }
+        close ifh;
+    }
+    if (-e "$mol.freq.log"){
+        open ifh, "$mol.freq.log" or die $!;
+        while (<ifh>) {
+            if (/SCF Done:  /) {
+                @crap=split(/\s+/,$_);
+                $b3lype = $crap[5] ; 
+            }
+        }
+        close ifh;
+    }
+    if (-e "../RMP2/$mol.rmp2.log"){
+        open ifh, "../RMP2/$mol.rmp2.log" or die $!;
+        while (<ifh>) {
+            if (/EUMP2/) {
+                @crap=split(/\s+/,$_);
+                $crap[6] =~ s/D/E/;
+                $romp2 = sprintf("%.12f", $crap[6]);
+            }
+        }
+        close ifh;
+    }
+       if (-e "../G3MP2/$mol.g3.log"){
+           print "g3mp2\n";
+           #if (-e "$mol.g3.log"){
+            open ifh, "../G3MP2/$mol.g3.log" or die $!;
+        #open ifh, "$mol.g3.log" or die $!;
+        while (<ifh>) {
+            if (m?SCF Done:  E\(ROHF\)?) {
+                @crap=split(/\s+/,$_);
+                $rohfe = $crap[5] ; 
+            }
+            if (m?SCF Done:  E\(RHF\)?) {
+                @crap=split(/\s+/,$_);
+                $rohfe = $crap[5] ; 
+            }
+            if (/SCF Done:  E\(UHF\)/) {
+                @crap=split(/\s+/,$_);
+                $uhfe = $crap[5] ; 
+            }
+            if (/EUMP2/) {
+                @crap=split(/\s+/,$_);
+                $crap[6] =~ s/D/E/;
+                $res = sprintf("%.12f", $crap[6]);
+                push (@mp2,$res);
+            }
+            if (/CCSD\(T\)= /) {
+                @crap=split(/\s+/,$_);
+                $ccsdte = $crap[2] ; 
+                $ccsdte =~ s/D/E/;
+            }
+        }
+        close ifh;
+    }
+    if (-e "../CCSDT/$mol.gcc.log"){
+        print "gcc\n";
+        open ifh, "../CCSDT/$mol.gcc.log" or die $!;
+        while(<ifh>){
+            if (/T1 Diagnostic/) {
+                @crap=split(/\s+/,$_);
+                $T1g = sprintf("%.12f", $crap[4]);
+                print "$T1g\n";
+                }
+            if (/^ CCSD\(T\)=/) {
+                @crap=split(/\s+/,$_);
+                $crap[2] =~ s/D/E/;
+                $urccsdte = sprintf("%.12f", $crap[2]); 
+                print "$urccsdte\n";
+                }
+        }
+        close ifh;
+    }
+
+
+       if (-e "../CCSDT/$mol.ccsdt.out"){
+    #if (-e "../CISDT/$mol.cisdt.out"){
+    #if (-e "$mol.ccsdt.out"){
+    #open ifh, "../CISDT/$mol.cisdt.out" or die $!;
+        open ifh, "../CCSDT/$mol.ccsdt.out" or die $!;
+        #   open ifh, "$mol.ccsdt.out" or die $!;
+        while (<ifh>) {
+            if (/T1 diagnostic:/) {
+                @crap=split(/\s+/,$_);
+                $T1m = sprintf("%.12f", $crap[10]);
+            }
+            if (/Reference/) {
+                @crap=split(/\s+/,$_);
+                $rhfe = $crap[3] ; 
+            }
+            if (/RHF STATE 1.1 ENERGY/) {
+                @crap=split(/\s+/,$_);
+                $rhfe = $crap[5] ; 
+            }
+            if (/RHF-UCCSD\(T\) STATE/) {
+                @crap=split(/\s+/,$_);
+                $urccsdte = $crap[5] ; 
+            }
+            if (/RHF-RCCSD\(T\) STATE/) {
+                @crap=split(/\s+/,$_);
+                $ccsdte = $crap[5] ; 
+            }
+            if (/RHF-UCCSD\(T\) ENERGY/ ) {
+                @crap=split(/\s+/,$_);
+                $urccsdte = $crap[3] ; 
+            }
+            if (/RHF-UCCSD\(T\) energy/ ) {
+                @crap=split(/\s+/,$_);
+                $urccsdte = $crap[3] ; 
+            }
+            if (/RHF-RCCSD\(T\) ENERGY/) {
+                @crap=split(/\s+/,$_);
+                $ccsdte = $crap[3] ; 
+            }
+            if (/!CCSD\(T\) STATE 1.1 ENERGY/) {
+                @crap=split(/\s+/,$_);
+                $urccsdte = $crap[5] ; 
+            }
+            if (/CCSD\(T\) total energy/) {
+                @crap=split(/\s+/,$_);
+                $urccsdte = $crap[4] ; 
+            }
+            if (/RHF-UQCISD\(T\) STATE 1.1 ENERGY/) {
+                @crap=split(/\s+/,$_);
+                $ccsdte = $crap[5] ; 
+            }
+        }
+        close ifh;
+    }
+
+    print " $b3lype,$rohfe,$romp2,$uhfe,$urccsdte,@mp2,$uccsdt,$T1g,$T1m,$UvsUR\n";
+    return $b3lype,$rohfe,$romp2,$uhfe,$urccsdte,@mp2,$uccsdt,$T1g,$T1m,$UvsUR;
+}
+

@@ -1,0 +1,51 @@
+#! /usr/bin/perl 
+
+# USAGE g3eng2 $list [$temp] [$cutoff] # $list contain lines of $mol
+$list = $ARGV[0];
+
+open listcsv, ">$list.G3.csv", or die $!;
+
+if (!$ARGV[1]){
+    print listcsv "No temperature is specified, 298.15 K is used.\n";
+    print "No temperature is specified, 298.15 K is used.\n";
+    $temp=298.15;
+}
+else{
+    $temp = $ARGV[1];
+    print listcsv "Using $temp K as reaction temperature.\n";
+    print "Using $temp K as reaction temperature.\n";
+}
+if (!$ARGV[2]){
+    print listcsv "No QHO cutoff is specified, 30 cm-1 is used.\n\n";
+    print "No QHO cutoff is specified, 30 cm-1 is used.\n\n";
+    $cutoff=30;
+}
+else{
+    $cutoff = $ARGV[2];
+    print listcsv "Using $cutoff cm-1 as QHO cutoff.\n\n";
+    print "Using $cutoff cm-1 as QHO cutoff.\n\n";
+}
+    chomp($temp);
+
+print listcsv "===========================================================================================\n";
+print "===========================================================================================\n";
+
+print listcsv "mol,entropy(J/mol K),tc,zpve,hlc,so,b3lyp,romp2,mp2s,mp2l,urccsdt,T1m,uccsdt,T1g,UvsUR,rohf(gaussian),rhf(molpro),hf-diff,TS,Eraw,Eoniom,Honiom,Goniom\n";
+print "mol,entropy(J/mol K),tc,zpve,hlc,so,b3lyp,romp2,mp2s,mp2l,urccsdt,T1m,uccsdt,T1g,UvsUR,rohf(gaussian),rhf(molpro),hf-diff,TS,Eraw,Eoniom,Honiom,Goniom\n";
+
+open list, "$list", or die $!;
+while ($mollist = <list>){
+    foreach  $mol ($mollist){
+        chomp($mol);
+        `g3engmol2 $mol $temp $cutoff`;
+        open molG3, "$mol.G3" or die $!;
+        while($line = <molG3>){
+            print $line;
+            print listcsv $line;
+        }
+        close molG3;
+    }
+}
+close list;
+
+__END__

@@ -1,0 +1,61 @@
+#!/usr/bin/perl
+
+if (@ARGV < 2) { die "Syntax: getE-scan filename identifier [nstates]\nPulls all the optimised energies out of a PES scan.\nidentifier is anything that will pull out the value of the parameter being scanned.\nUse nstates to pull out more than one excited state and calculate actual energies for TD-DFT PES scans.\n" } 
+
+$file = $ARGV[0];
+$id = $ARGV[1];
+$nstates = $ARGV[2];
+$read = "n";
+$npt = 0;
+
+open (FILE, "<$file") || die "couldn't open $file for reading\n";
+while ($line = <FILE>) {
+ #   print "$line $read\n";
+     if ($line =~ / Optimization completed./) { 
+         $read = "y";
+         printf "%-3i   ", $npt;
+     } 
+     if (($line =~ /$id/) && ($line =~ /-DE\/DX/) && ($read =~ /y/))  { 
+         @tmp = split(/\s+/,$line);
+         if ($tmp[3] =~/\d+\.\d+/) {
+             $r[$npt] = $tmp[3];
+         }
+         else {
+             $r[$npt] = $tmp[4];
+         }
+         printf "%6.4f   ", $r[$npt];
+         if ($nstates == 0) { 
+             printf "%12.6f    ", $E[$npt][0];
+             $npt++;
+             $read = "n";
+             print "\n";
+         }
+     }
+     if ($line =~ /SCF Done/)  { 
+         @tmp = split(/\s+/,$line);
+         $E[$npt][0] = $tmp[5];
+     }
+     if (($line =~ / Excited State/) && ($read =~ /y/))  { 
+         for ($i = 1; $i <= $nstates-1; $i++) {
+             if ($line =~ / Excited State   $i/) {
+                 @tmp = split(/\s+/,$line);
+                 $E[$npt][$i] = $E[$npt][0] + $tmp[5]/27.211;
+                 printf "%12.6f    ", $E[$npt][0];
+                 printf "%12.6f    ", $E[$npt][$i];
+             }
+         }
+     }
+     if (($line =~ / Excited State   $nstates/) && ($read =~ /y/))  { 
+         @tmp = split(/\s+/,$line);
+         $E[$npt][$nstates] = $E[$npt][0] + $tmp[5]/27.211;
+         printf "%12.6f    ", $E[$npt][0];
+         printf "%12.6f    ", $E[$npt][$nstates];
+         $npt++;
+         $read = "n";
+         print "\n";
+     }
+}
+
+close (FILE);
+
+

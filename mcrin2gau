@@ -1,0 +1,155 @@
+#!/usr/bin/perl
+
+if (@ARGV < 1) { die "Syntax: mcrin2auto fileset [list]\nSetup calculation in start of script.\n" }
+
+$files = $ARGV[0];
+$type = $ARGV[1];
+
+if ($type =~ "list") {
+     $listfile = $files;
+     }
+else {
+     @FS = split(/\~/,$files);
+     $listfile = "list";
+     `ls *$FS[0]*$FS[1]*$FS[2]*$FS[3]* > $listfile`;
+     }
+for ($i = 0; $i <= 10; $i++) { $thn[$i] = "copy"; $bsn[$i] = "copy" }
+
+##### Set options for crin here #####
+
+# charge and multiplicity - these are only used when reading from xyz files - if reading from other filetypes values are taken from there 
+    $charge = 0;
+    $multi = 1;
+# how many levels of theory
+    $nth = 1;
+    # list levels of theory
+    # if level includes ()*+ also include $thn as an abbreviation that can be used in a filename eg CCSDt for CCSD(T)
+#       $th[1] = "MP2";
+#       $th[2] = "CCSD(T,FrzG3,T1Diag)";
+#       $thn[2] = "CCSDt";
+        $th[1] = "M062X";
+#       $th[1] = "B97D3";
+#       $th[1] = "B3LYP";
+#       $th[1] = "M052X";
+#       $th[2] = "M06L";
+# how many basis sets 
+    $nbs = 1;
+    # list basis sets - for Rassolov 6-31(+)G* $qnew = y else $qnew = n
+    # if basis set name includes ()*+ also include $bsn as an abbreviation that can be used in a filename eg 6-31pGd for 6-31+G*
+#       $bs[1] = "6-31G(d)";
+#       $bsn[1] = "6-31Gd";
+#       $qnew[1] = "y";
+        $bs[1] = "6-31+G*";
+        $bsn[1] = "6-31pGd";
+        $qnew[1] = "y";
+#       $bs[1] = "def2svp";
+#       $bsn[1] = "def2svp";
+#       $qnew[1] = "n";
+#       $bs[2] = "GTMP2Large";
+#       $bsn[2] = "g3l";
+#       $qnew[2] = "y";
+#       $bs[1] = "6-311+G(d,p)";
+#       $bsn[1] = "6-311pGdp";
+#       $qnew[1] = "n";
+#       $bs[1] = "cc-pVTZ";
+#       $bsn[1] = "cc-pVTZ";
+#       $qnew[1] = "n";
+#       $bs[3] = "aug-cc-pVTZ";
+#       $bsn[3] = "aug-cc-pVTZ";
+#       $qnew[3] = "n";
+#       $bs[1] = "GenECP";
+#       $bsn[1] = "cc-pVTZ";
+#       $qnew[1] = "n";
+# $jobtype => opt or not?
+    $jobtype = "y";
+#   $jobtype = "n";
+# $zmq => opt=z-matrix?
+#   $zmq = "y";
+    $zmq = "n";
+# $freqtype => calc freqs?
+    $freqtype = "y";
+#   $freqtype = "n";
+# $solvq => use a solvation model?
+#   $solvq = "y";
+    $solvq = "n";
+    # how many solvent models?
+        $nsolvmdl = 1;
+        # which solvent models?
+            $solv[1] = "smd";
+#           $solv[2] = "uaks";
+#           $solv[3] = "uahf";
+    # how many solvents?
+        $nsolv = 1;
+        # list solvents and corresponding abbreviations
+#           $solvent[1] = "water";
+#           $solab[1] = "h2o";
+            $solvent[1] = "acetonitrile";
+            $solab[1] = "ch3cn";
+#           $solvent[1] = "methanol";
+#           $solab[1] = "ch3oh";
+#           $solvent[1] = "toluene";
+#           $solab[1] = "tol";
+    # $gsolv => calculate dGsolv?
+#       $gsolv = "y";
+        $gsolv = "n";
+# $fieldq => add an external electric field?
+#   $fieldq = "y";
+    $fieldq = "n";
+#   $fieldq = "read";
+    # components of field
+       $field[0] = 0.0;
+       $field[1] = 0.0;
+       $field[2] = 0.0;
+# $other => insert any other required commands
+#   $other = "none";
+#   $other = "IOP(2/17=4)";
+#   $other = "Pop=full";
+#   $other = "TD(Nstates=10)";
+#   $other = "Nosymm";
+# jobfile suffix - use "" if you want crin2 to determine this automatically - use $autosfx="y" to give $sfx=$th.$bsn[.$solv.$solab] 
+#   $sfx = "";
+#   $sfx = "gas";
+#   $sfx = "tol";
+#   $sfx = "preopt";
+#   $sfx = "-TD-ns10";
+#   $sfx = "ccpVTZ";
+    $autosfx = "y";
+
+#####################################
+
+open (LST, "<$listfile") || die "couldn't open $listfile for reading\n";
+while (<LST>) {
+     chomp;
+     $fn = $_;
+     $rt = $_;
+     $rt =~ s/.log//;
+     $rt =~ s/.xyz//;
+     for ($i = 1; $i <= $nth; $i++) {
+         if ($thn[$i] =~ /copy/) { $thn[$i] = $th[$i] }
+         for ($j = 1; $j <= $nbs; $j++) {
+             if ($bsn[$i] =~ /copy/) { $bsn[$i] = $bs[$i] }
+             if ($solvq =~ "n") {
+                 if ($autosfx =~ "y") { $sfx = "$thn[$i].$bsn[$j]" }
+                 $com = "$rt.$sfx.com";
+                 print "$com\n";
+                 if ($sfx !~ /\S/) { $sfx = "auto" }
+#                print "crin2auto $fn $charge $multi $th[$i] \"$bs[$j]\" $qnew[$j] $jobtype $zmq $freqtype $solvq 0 0 0 n \"$other\" $sfx\n";
+                 `crin2auto $fn $charge $multi \"$th[$i]\" \"$bs[$j]\" $qnew[$j] $jobtype $zmq $freqtype $solvq 0 0 0 n $fieldq $field[0] $field[1] $field[2] \"$other\" $sfx`;
+#                `rjsub $com`;
+             }
+             else {
+                 for ($k = 1; $k <= $nsolvmdl; $k++) {
+                     for ($l = 1; $l <= $nsolv; $l++) {
+                         if ($autosfx =~ "y") { $sfx = "$thn[$i].$bsn[$j]" }
+                         $com = "$rt.$sfx.com";
+                         print "$com\n";
+#                        print "crin2auto $fn $charge $multi $th[$i] \"$bs[$j]\" $qnew[$j] $jobtype $zmq $freqtype $solvq $solv[$k] $solvent[$l] $solab[$l] $gsolv  $fieldq $field[0] $field[1] $field[2] \"$other\" $sfx\n";
+#                        system("crin2auto $fn $charge $multi \"$th[$i]\" \"$bs[$j]\" $qnew[$j] $jobtype $zmq $freqtype $solvq $solv[$k] $solvent[$l] $solab[$l] $gsolv  $fieldq $field[0] $field[1] $field[2] \"$other\" $sfx");
+                         `crin2auto $fn $charge $multi \"$th[$i]\" \"$bs[$j]\" $qnew[$j] $jobtype $zmq $freqtype $solvq $solv[$k] $solvent[$l] $solab[$l] $gsolv  $fieldq $field[0] $field[1] $field[2] \"$other\" $sfx`;
+#                        `rjsub $com`;
+                     }
+                 }
+             }
+         }
+     }
+}

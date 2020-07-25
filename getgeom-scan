@@ -1,0 +1,95 @@
+#!/usr/bin/perl
+
+if (@ARGV < 2) { die "Syntax: getgeom filename identifier rootname charge multiplicity\nPulls out optimised geometries from a PES scan and uses them to create a new set of com files [rootname]-[identifier value].com\nEdit script to change calc type, basis set, etc.\n" } 
+
+$file = $ARGV[0];
+$id = $ARGV[1];
+$mol = $ARGV[2];
+$c = $ARGV[3];
+$m = $ARGV[4];
+$read = "n";
+$readgeom = "n";
+$npt = 0;
+
+    @symbo=("H" ,                                                                                "He",
+        "Li","Be",                                                   "B", "C", "N", "O", "F","Ne",
+        "Na","Mg",                                                  "Al","Si", "P", "S","Cl","Ar",
+        "K" ,"Ca","Sc","Ti", "V","Cr","Mn","Fe","Co","Ni","Cu","Zn","Ga","Ge","As","Se","Br","Kr",
+        "Rb","Sr", "Y","Zr","Nb","Mo","Tc","Ru","Rh","Pd","Ag","Cd","In","Sn","Sb","Te", "I","Xe",
+        "Cs","Ba",
+        "La","Ce","Pr","Nd","Pm","Sm","Eu","Gd","Tb","Dy","Ho","Er","Tm","Yb","Lu",
+        "Hf","Ta", "W","Re","Os","Ir","Pt","Au","Hg","Tl","Pb","Bi","Po","At","Rn",
+        "Fr","Ra",
+        "Ac","Th","Pa", "U","Np","Pu","Am","Cm","Bk","Cf","Es","Fm","Md","No","Lr");
+
+open (FILE, "<$file") || die "couldn't open $file for reading\n";
+while ($line = <FILE>) {
+ #   print "$line $read\n";
+     if ($line =~ / Optimization completed./) { 
+         $read = "y";
+     } 
+     if (($line =~ /$id/) && ($line =~ /-DE\/DX/) && ($read =~ /y/))  { 
+         @tmp = split(/\s+/,$line);
+         if ($tmp[3] =~/\d+\.\d+/) {
+             $r[$npt] = $tmp[3];
+         }
+         else {
+             $r[$npt] = $tmp[4];
+         }
+         printf "%6.4f   ", $r[$npt];
+         printf "%12.6f    ", $E[$npt][0];
+         print "\n";
+         $val[$npt] = int($r[$npt]*10);
+         $root = $mol."-".$val[$npt];
+         $out = $mol."-".$val[$npt].".com";
+         open(OUT, ">$out") || die "Can't open $out for writing.\n"; 
+         print OUT "%chk=$root.chk\n";
+         print OUT "#BP86/gen 5D SCF=(Tight) IOP(2/17=4) INT(grid=ultrafine) Opt geom=modredundant\n\n";
+         print OUT "$root\n\n";
+         print OUT "$c $m\n";
+         for ($i = 0 ;$i <= $#last_geometry ; $i++){
+             @crap= split(/\s+/,$last_geometry[$i]);
+             $atom[$i] = $crap[2];
+             $x[$i] = $crap[4];
+             $y[$i] = $crap[5];
+             $z[$i] = $crap[6];
+             $stripped_geometry[$i] = "$symbo[$atom[$i]-1]\t$x[$i]\t$y[$i]\t$z[$i]";
+         }
+         $stripped_geometry = join("\n",@stripped_geometry);
+         print OUT "$stripped_geometry\n"; 
+         print OUT "\n 29 35 F\n\n";
+         print OUT "C H O 0\ndef2svp\n****\nFe 0\ndef2tzvp\n****\n\n";
+         print OUT "\n --Link1--\n";
+         print OUT "%chk=$root.chk\n";
+         print OUT "#BP86/gen 5D SCF=(Tight) IOP(2/17=4) INT(grid=ultrafine) geom=check gues=read Freq(NoRaman) \n\n";
+         print OUT "$root\n\n";
+         print OUT "$c $m\n\n";
+         print OUT "C H O 0\ndef2svp\n****\nFe 0\ndef2tzvp\n****\n\n";
+         close (OUT);
+         $npt++;
+         $read = "n";
+     }
+     if ($line =~ /SCF Done/)  { 
+         @tmp = split(/\s+/,$line);
+         $E[$npt][0] = $tmp[5];
+     }
+     if ($line =~ /Standard orientation/)  { 
+         $readgeom = "y";
+         $no = 0;
+         
+     }
+     if ($readgeom =~ /y/) {
+        if ($line =~ /^\s+\d+/) { 
+            $last_geometry[$no] = $line;
+            $no++;
+            }
+        if ($line =~ /Rot/) { 
+            $readgeom = "n";
+            } 
+     }
+
+}
+
+close (FILE);
+
+
